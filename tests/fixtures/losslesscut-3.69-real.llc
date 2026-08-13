@@ -1,0 +1,30 @@
+{
+  version: 2,
+  mediaFileName: 'proxy1_h264.mp4',
+  cutSegments: [
+    {
+      start: 399.453776,
+      end: 559.480152,
+      name: '',
+      selected: true,
+    },
+    {
+      start: 579.143852,
+      end: 700.285526,
+      name: '',
+      selected: true,
+    },
+    {
+      start: 720.604865,
+      end: 948.45305,
+      name: '',
+      selected: true,
+    },
+    {
+      start: 1003.248263,
+      end: 1045.356133,
+      name: '',
+      selected: true,
+    },
+  ],
+}
