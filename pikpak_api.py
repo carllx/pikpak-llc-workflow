@@ -85,14 +85,18 @@ def get_media_variants(share_url):
     
     share_data = resp.json()
     file_id = None
+    file_name = "download"
     pass_code_token = share_data.get('pass_code_token', '')
     
     if 'file' in share_data:
         file_id = share_data['file'].get('id')
+        file_name = share_data['file'].get('name', file_name)
     elif 'share' in share_data:
         file_id = share_data['share'].get('file_id')
+        file_name = share_data['share'].get('file_name', file_name)
     elif 'files' in share_data and share_data['files']:
         file_id = share_data['files'][0].get('id')
+        file_name = share_data['files'][0].get('name', file_name)
 
     if not file_id:
         raise ValueError(f"Could not extract file_id from API response. Got keys: {list(share_data.keys())}")
@@ -114,7 +118,7 @@ def get_media_variants(share_url):
     if not medias:
         raise ValueError(f"No medias found. Found keys: {list(file_info.keys())}")
         
-    return medias
+    return medias, file_name
 
 def download_range(url, bytes_range="0-65535", max_bytes=65536):
     headers = {'Range': f'bytes={bytes_range}'}
@@ -173,7 +177,7 @@ def get_origin_url(share_url):
     Discover the Origin URL from the share file info.
     It inspects the medias[] array for the is_origin flag or category_origin.
     """
-    medias = get_media_variants(share_url)
+    medias, _ = get_media_variants(share_url)
     for m in medias:
         if m.get('is_origin') or m.get('category') == 'category_origin':
             if 'link' in m and 'url' in m['link']:
@@ -183,21 +187,16 @@ def get_origin_url(share_url):
 
 def get_proxy_url(share_url):
     """
-    Discover the 480P proxy URL from the share file info.
+    Discover the 480P proxy URL and original filename from the share file info.
+    Returns (url, filename)
     """
-    medias = get_media_variants(share_url)
+    medias, filename = get_media_variants(share_url)
     for m in medias:
         if str(m.get('resolution_name')).upper() == '480P':
             if 'link' in m and 'url' in m['link']:
-                return m['link']['url']
+                return m['link']['url'], filename
                 
-    # Fallback to the first non-origin media if 480P doesn't exist
-    for m in medias:
-        if not m.get('is_origin') and m.get('category') != 'category_origin':
-            if 'link' in m and 'url' in m['link']:
-                return m['link']['url']
-                
-    raise ValueError("Proxy media (480P) not found in the variants.")
+    raise ValueError("Proxy media (480P) strictly not found in the variants. No silent fallback allowed.")
 
 def download_proxy_video(share_url, output_path):
     """

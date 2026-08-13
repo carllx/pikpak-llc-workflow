@@ -1,18 +1,43 @@
-import sys
 import os
+import sys
 import requests
 from pikpak_api import get_proxy_url
+import subprocess
+import shutil
 
-def download_proxy(share_url, output_path):
-    print(f"Resolving proxy URL for: {share_url}")
+def check_hw_encoder():
+    """Check for available hardware encoders using FFmpeg."""
+    try:
+        result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, check=True)
+        encoders = result.stdout
+        # Order of preference
+        if "h264_nvenc" in encoders:
+            return "h264_nvenc"
+        if "h264_qsv" in encoders:
+            return "h264_qsv"
+        if "h264_amf" in encoders:
+            return "h264_amf"
+    except:
+        pass
+    return "libx264"
+
+def download_proxy(share_url, output_path=None):
+    print("Resolving proxy URL for the provided share...")
     
     try:
-        proxy_url = get_proxy_url(share_url)
+        proxy_url, file_name = get_proxy_url(share_url)
     except Exception as e:
         print(f"Error resolving proxy URL: {e}")
         sys.exit(1)
         
-    print(f"Target URL resolved. Starting download to: {output_path}")
+    # Determine the final output path based on user input and API filename
+    if not output_path:
+        output_path = file_name
+    elif os.path.isdir(output_path):
+        output_path = os.path.join(output_path, file_name)
+
+    print(f"Target URL resolved. Original filename: {file_name}")
+    print(f"Starting download to: {output_path}")
     
     try:
         with requests.get(proxy_url, stream=True) as r:
@@ -40,38 +65,52 @@ def download_proxy(share_url, output_path):
         sys.exit(1)
 
     # Automatically transcode to highly compatible H.264 MP4 using FFmpeg if available
-    import subprocess
-    import shutil
     if shutil.which("ffmpeg"):
-        print("FFmpeg found. Transcoding to highly compatible H.264 MP4 for LosslessCut...")
-        temp_output = output_path + ".tmp.mp4"
+        encoder = check_hw_encoder()
+        
+        if encoder == "libx264":
+            print("\nWARNING: No hardware encoder detected (NVENC/QSV/AMF). Falling back to CPU libx264.")
+            print("This may take a significant amount of time depending on your CPU.")
+        else:
+            print(f"\nHardware encoder '{encoder}' detected. Proceeding with fast hardware transcode.")
+            
+        final_mp4 = os.path.splitext(output_path)[0] + ".mp4"
+        temp_output = final_mp4 + ".tmp.mp4"
+        
         try:
-            # Re-encode video to h264 for maximum compatibility (some proxy TS are HEVC which Chromium/LosslessCut struggles with)
-            # -movflags +faststart optimizes the mp4 for web-seeking
             cmd = [
                 "ffmpeg", "-y", "-i", output_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:v", encoder, "-preset", "fast", "-crf" if encoder == "libx264" else "-cq", "23",
                 "-c:a", "aac",
                 "-movflags", "+faststart",
                 temp_output
             ]
+            
+            # AMF uses different quality params usually, but for a proxy, defaults or CQ works well enough
+            if encoder == "h264_amf":
+                cmd = ["ffmpeg", "-y", "-i", output_path, "-c:v", encoder, "-quality", "balanced", "-c:a", "aac", "-movflags", "+faststart", temp_output]
+                
             subprocess.run(cmd, check=True)
-            # Replace original file with the transcoded one
-            import os
-            os.replace(temp_output, output_path)
-            print("Transcoding complete! File is ready for LosslessCut.")
+            
+            os.replace(temp_output, final_mp4)
+            # Retain original TS? "C. 保留原始下载文件直到兼容输出验证成功。"
+            # It successfully transcoded. But let's follow explicit instructions to retain it for debugging.
+            # "保留原始下载文件" implies we shouldn't delete it immediately.
+            # We'll just leave `output_path` intact.
+            print(f"Transcoding complete! File is ready for LosslessCut: {final_mp4}")
+            print(f"Original file retained at: {output_path}")
         except Exception as e:
             print(f"FFmpeg transcoding failed (original file kept): {e}")
     else:
         print("Warning: FFmpeg not found on system PATH. Output may be an incompatible MPEG-TS stream disguised as .mp4.")
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print("Usage: python download_proxy.py <share_url> <output_file.mp4>")
+    if len(sys.argv) < 2:
+        print("Usage: python download_proxy.py <share_url> [output_file_or_dir]")
         sys.exit(1)
         
     share_url = sys.argv[1]
-    output_path = sys.argv[2]
+    output_path = sys.argv[2] if len(sys.argv) > 2 else None
     
     # If the URL is just an ID, construct the full URL
     if not share_url.startswith("http"):
