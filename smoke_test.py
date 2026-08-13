@@ -1,10 +1,19 @@
 import sys
+import os
 import traceback
 from pikpak_api import get_media_variants, download_range
 
 def run_smoke():
+    share_url = os.environ.get("PIKPAK_TEST_SHARE_URL")
+    if len(sys.argv) > 1:
+        share_url = sys.argv[1]
+        
+    if not share_url:
+        print("Usage: python smoke_test.py <share_url>")
+        print("Or set PIKPAK_TEST_SHARE_URL environment variable.")
+        return False
+
     print("Stage: Share URL parsing and variants extraction")
-    share_url = "https://mypikpak.com/s/VOzuCvKmZUsWl46t2khdDdcDo2"
     try:
         medias = get_media_variants(share_url)
         print("Successfully obtained media variants.")

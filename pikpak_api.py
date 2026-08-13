@@ -9,19 +9,8 @@ import hashlib
 def get_default_headers(device_id, client_id, client_version, package_name):
     return {
       'x-device-id': device_id,
-      'x-device-name': 'PC-Chrome',
-      'x-device-model': 'chrome/120.0.0.0',
-      'x-provider-name': 'NONE',
-      'x-platform-version': '1',
       'x-client-id': client_id,
-      'x-protocol-version': '301',
-      'x-net-work-type': 'NONE',
-      'x-os-version': 'Win32',
-      'referer': 'https://mypikpak.com/',
-      'x-device-sign': f'wdi10.{device_id}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-      'x-sdk-version': '8.0.3',
       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'x-client-version': client_version
     }
 
 def generate_captcha_sign(client_id, client_version, package_name, device_id, timestamp_str):
@@ -171,4 +160,10 @@ def download_range(url, bytes_range="0-65535", max_bytes=65536):
                 break
                 
     resp.close()
-    return bytes(downloaded[:max_bytes])
+    
+    result = bytes(downloaded[:max_bytes])
+    expected_length = end_req - start_req + 1
+    if len(result) != expected_length:
+        raise ValueError(f"Incomplete download: expected {expected_length} bytes, got {len(result)} bytes")
+        
+    return result
