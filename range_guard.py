@@ -137,45 +137,45 @@ class ValidatedRangeResponse:
             raise
 
     def iter_content(self, chunk_size=65536):
-        try:
-            while self.transferred_bytes < self.expected_bytes:
-                requested = min(
-                    chunk_size, self.expected_bytes - self.transferred_bytes
-                )
+        while self.transferred_bytes < self.expected_bytes:
+            requested = min(
+                chunk_size, self.expected_bytes - self.transferred_bytes
+            )
+            if self._open_ended:
+                reserved = self.ledger.reserve(requested, allow_partial=True)
+            else:
+                reserved = min(requested, self._reserved_remaining)
+                if reserved <= 0:
+                    raise TransferBudgetExceeded("Origin transfer budget reached")
+            try:
+                chunk = self.response.raw.read(reserved)
+            except Exception:
                 if self._open_ended:
-                    reserved = self.ledger.reserve(requested, allow_partial=True)
-                else:
-                    reserved = min(requested, self._reserved_remaining)
-                    if reserved <= 0:
-                        raise TransferBudgetExceeded("Origin transfer budget reached")
-                try:
-                    chunk = self.response.raw.read(reserved)
-                except Exception:
-                    if self._open_ended:
-                        self.ledger.release(reserved)
-                    raise
-                if not chunk:
-                    if self._open_ended:
-                        self.ledger.release(reserved)
-                    break
-                self.ledger.consume(len(chunk))
+                    self.ledger.release(reserved)
+                raise
+            if not chunk:
                 if self._open_ended:
-                    if len(chunk) < reserved:
-                        self.ledger.release(reserved - len(chunk))
-                else:
-                    self._reserved_remaining -= len(chunk)
-                self.transferred_bytes += len(chunk)
-                yield chunk
-            if self.transferred_bytes != self.expected_bytes:
-                raise RangeGuardError(
-                    f"Incomplete upstream body: {self.transferred_bytes}/{self.expected_bytes} bytes"
-                )
-            self._outcome = "PASS"
-        finally:
-            self.close()
+                    self.ledger.release(reserved)
+                break
+            self.ledger.consume(len(chunk))
+            if self._open_ended:
+                if len(chunk) < reserved:
+                    self.ledger.release(reserved - len(chunk))
+            else:
+                self._reserved_remaining -= len(chunk)
+            self.transferred_bytes += len(chunk)
+            yield chunk
+        if self.transferred_bytes != self.expected_bytes:
+            raise RangeGuardError(
+                f"Incomplete upstream body: {self.transferred_bytes}/{self.expected_bytes} bytes"
+            )
+        self._outcome = "PASS"
 
     def read(self):
-        return b"".join(self.iter_content())
+        try:
+            return b"".join(self.iter_content())
+        finally:
+            self.close()
 
     def close(self):
         if self.response is None:
@@ -280,10 +280,15 @@ class RangeGuard:
                     self.end_headers()
                     headers_sent = True
                     for chunk in upstream.iter_content():
-                        self.wfile.write(chunk)
-                except (BrokenPipeError, ConnectionResetError):
-                    if upstream is not None:
-                        upstream.abort("CLIENT_CLOSED")
+                        try:
+                            self.wfile.write(chunk)
+                        except (
+                            BrokenPipeError,
+                            ConnectionResetError,
+                            ConnectionAbortedError,
+                        ):
+                            upstream.abort("CLIENT_CLOSED")
+                            return
                 except Exception as error:
                     guard._failure = error
                     if not headers_sent:

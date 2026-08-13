@@ -306,3 +306,46 @@ def test_verify_mode_emits_one_safe_acceptance_report(monkeypatch, tmp_path):
     assert report["OUTPUT_PLAYABLE"] is True
     assert share not in serialized
     assert "SIGNED_SECRET" not in serialized
+
+
+def test_segments_mode_preserves_range_telemetry_when_extraction_fails(
+    monkeypatch, tmp_path
+):
+    segment = {"start": 1.0, "end": 2.0}
+    monkeypatch.setattr(
+        workflow,
+        "resolve_llc_origin",
+        lambda share, path: ([segment], "https://origin.invalid/private"),
+    )
+
+    def fake_fetch(origin_url, request_range, ledger):
+        record_transfer(ledger, request_range, 64, total_size=1000)
+        return b"x" * 64, 1000
+
+    def failing_extract(origin_url, segments, output_dir, ledger):
+        record_transfer(ledger, "bytes=100-199", 100, total_size=1000)
+        raise ConnectionError("simulated extraction failure")
+
+    monkeypatch.setattr(workflow, "fetch_exact_range", fake_fetch)
+    monkeypatch.setattr(workflow, "extract_with_guard", failing_extract)
+
+    report = workflow.segments_mode(
+        "PRIVATE_SHARE_TOKEN",
+        tmp_path / "project.llc",
+        tmp_path / "segments",
+        max_origin_bytes=1000,
+    )
+
+    assert report["STATUS"] == "FAIL"
+    assert report["ERROR_TYPE"] == "ConnectionError"
+    assert report["TOTAL_UPSTREAM_BYTES"] == 164
+    assert report["UPSTREAM_TRANSFERRED"] == 164
+    assert [event["status"] for event in report["RANGE_EVENTS"]] == [206, 206]
+    assert [event["content_range"] for event in report["RANGE_EVENTS"]] == [
+        "bytes 0-63/1000",
+        "bytes 0-99/1000",
+    ]
+    assert [event["outcome"] for event in report["RANGE_EVENTS"]] == [
+        "PASS",
+        "PASS",
+    ]

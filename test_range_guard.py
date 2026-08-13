@@ -1,5 +1,7 @@
 import io
 import json
+import socketserver
+import time
 import urllib.error
 import urllib.request
 
@@ -27,6 +29,18 @@ class FakeRaw:
         chunk = self._body.read(size)
         self.bytes_read += len(chunk)
         return chunk
+
+
+class AbortAfterFirstReadRaw(FakeRaw):
+    def __init__(self, body):
+        super().__init__(body)
+        self._read_count = 0
+
+    def read(self, size=-1):
+        self._read_count += 1
+        if self._read_count > 1:
+            raise ConnectionAbortedError("upstream connection aborted")
+        return super().read(size)
 
 
 class FakeResponse:
@@ -108,6 +122,24 @@ def test_http_200_is_closed_before_body_read():
     assert response.raw.bytes_read == 0
     assert ledger.total_upstream_bytes == 0
     assert ledger.events[0]["outcome"] == "HTTP_200_ABORT"
+
+
+def test_non_206_is_closed_before_body_read():
+    response = FakeResponse(416, {"Content-Range": "bytes */100"}, forbid_read=True)
+    ledger = TransferLedger(100)
+
+    with pytest.raises(RangeGuardError, match="got 416"):
+        open_upstream_range(
+            "https://origin.invalid/private",
+            "bytes=80-99",
+            ledger,
+            session=FakeSession([response]),
+        )
+
+    assert response.closed
+    assert response.raw.bytes_read == 0
+    assert ledger.total_upstream_bytes == 0
+    assert ledger.events[0]["outcome"] == "STATUS_REJECTED"
 
 
 def test_content_range_mismatch_is_rejected_before_body_read():
@@ -268,3 +300,105 @@ def test_local_guard_rejects_non_range_get_without_upstream_call():
     assert error.value.code == 400
     assert session.calls == []
     assert ledger.total_upstream_bytes == 0
+
+
+@pytest.mark.parametrize(
+    "client_error",
+    [BrokenPipeError, ConnectionResetError, ConnectionAbortedError],
+)
+def test_known_client_abort_after_partial_transfer_is_not_fatal(
+    monkeypatch, client_error
+):
+    chunk_size = 65536
+    body = b"a" * chunk_size + b"b" * chunk_size
+    session = FakeSession([partial_response(body)])
+    ledger = TransferLedger(len(body))
+    original_write = socketserver._SocketWriter.write
+
+    def abort_on_first_body_write(writer, data):
+        if data == body[:chunk_size]:
+            raise client_error("downstream client closed")
+        return original_write(writer, data)
+
+    monkeypatch.setattr(socketserver._SocketWriter, "write", abort_on_first_body_write)
+
+    with RangeGuard("https://origin.invalid/private", ledger, session=session) as guard:
+        request = urllib.request.Request(
+            guard.url,
+            headers={"Range": f"bytes=0-{len(body) - 1}"},
+        )
+        with urllib.request.urlopen(request) as response:
+            with pytest.raises(Exception):
+                response.read()
+        deadline = time.monotonic() + 1
+        while not ledger.events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        guard.raise_if_failed()
+
+    assert ledger.total_upstream_bytes == chunk_size
+    assert ledger.events == [
+        {
+            "range": f"bytes=0-{len(body) - 1}",
+            "status": 206,
+            "content_range": f"bytes 0-{len(body) - 1}/{len(body)}",
+            "bytes_transferred": chunk_size,
+            "outcome": "CLIENT_CLOSED",
+        }
+    ]
+    assert ledger.reserve(chunk_size) == chunk_size
+
+
+def test_unknown_downstream_write_error_remains_fatal(monkeypatch):
+    body = b"fatal"
+    session = FakeSession([partial_response(body)])
+    ledger = TransferLedger(len(body))
+    original_write = socketserver._SocketWriter.write
+
+    def fail_body_write(writer, data):
+        if data == body:
+            raise RuntimeError("unknown downstream failure")
+        return original_write(writer, data)
+
+    monkeypatch.setattr(socketserver._SocketWriter, "write", fail_body_write)
+
+    with RangeGuard("https://origin.invalid/private", ledger, session=session) as guard:
+        request = urllib.request.Request(guard.url, headers={"Range": "bytes=0-4"})
+        with urllib.request.urlopen(request) as response:
+            with pytest.raises(Exception):
+                response.read()
+        deadline = time.monotonic() + 1
+        while not ledger.events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with pytest.raises(RangeGuardError, match="RuntimeError"):
+            guard.raise_if_failed()
+
+    assert ledger.events[0]["outcome"] == "FAIL"
+
+
+def test_upstream_connection_abort_remains_fatal():
+    chunk_size = 65536
+    body = b"a" * chunk_size + b"b" * chunk_size
+    response = partial_response(body)
+    response.raw = AbortAfterFirstReadRaw(body)
+    ledger = TransferLedger(len(body))
+
+    with RangeGuard(
+        "https://origin.invalid/private",
+        ledger,
+        session=FakeSession([response]),
+    ) as guard:
+        request = urllib.request.Request(
+            guard.url,
+            headers={"Range": f"bytes=0-{len(body) - 1}"},
+        )
+        with urllib.request.urlopen(request) as downstream:
+            with pytest.raises(Exception):
+                downstream.read()
+        deadline = time.monotonic() + 1
+        while not ledger.events and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with pytest.raises(RangeGuardError, match="ConnectionAbortedError"):
+            guard.raise_if_failed()
+
+    assert ledger.total_upstream_bytes == chunk_size
+    assert ledger.events[0]["outcome"] == "FAIL"
