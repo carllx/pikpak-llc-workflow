@@ -104,7 +104,7 @@ def validate_content_range(request_range, value):
 class ValidatedRangeResponse:
     """A validated upstream 206 response with reserved transfer budget."""
 
-    def __init__(self, response, request_range, ledger, allow_partial_budget=False):
+    def __init__(self, response, request_range, ledger):
         self.response = response
         self.request_range = request_range
         self.ledger = ledger
@@ -115,7 +115,6 @@ class ValidatedRangeResponse:
         self.total_size = None
         self._reserved_remaining = 0
         self._outcome = "FAIL"
-        self._allow_partial_budget = allow_partial_budget
 
         if self.status != 206:
             self._record_and_close("HTTP_200_ABORT" if self.status == 200 else "STATUS_REJECTED")
@@ -130,10 +129,9 @@ class ValidatedRangeResponse:
             if content_length is not None and int(content_length) != self.expected_bytes:
                 raise RangeGuardError("Content-Length does not match Content-Range")
             _, requested_end = parse_request_range(request_range)
-            self._reserved_remaining = ledger.reserve(
-                self.expected_bytes,
-                allow_partial=allow_partial_budget and requested_end is None,
-            )
+            self._open_ended = requested_end is None
+            if not self._open_ended:
+                self._reserved_remaining = ledger.reserve(self.expected_bytes)
         except Exception:
             self._record_and_close("VALIDATION_REJECTED")
             raise
@@ -141,18 +139,31 @@ class ValidatedRangeResponse:
     def iter_content(self, chunk_size=65536):
         try:
             while self.transferred_bytes < self.expected_bytes:
-                allowed = min(
-                    chunk_size,
-                    self.expected_bytes - self.transferred_bytes,
-                    self._reserved_remaining,
+                requested = min(
+                    chunk_size, self.expected_bytes - self.transferred_bytes
                 )
-                if allowed <= 0:
-                    raise TransferBudgetExceeded("Origin transfer budget reached")
-                chunk = self.response.raw.read(allowed)
+                if self._open_ended:
+                    reserved = self.ledger.reserve(requested, allow_partial=True)
+                else:
+                    reserved = min(requested, self._reserved_remaining)
+                    if reserved <= 0:
+                        raise TransferBudgetExceeded("Origin transfer budget reached")
+                try:
+                    chunk = self.response.raw.read(reserved)
+                except Exception:
+                    if self._open_ended:
+                        self.ledger.release(reserved)
+                    raise
                 if not chunk:
+                    if self._open_ended:
+                        self.ledger.release(reserved)
                     break
                 self.ledger.consume(len(chunk))
-                self._reserved_remaining -= len(chunk)
+                if self._open_ended:
+                    if len(chunk) < reserved:
+                        self.ledger.release(reserved - len(chunk))
+                else:
+                    self._reserved_remaining -= len(chunk)
                 self.transferred_bytes += len(chunk)
                 yield chunk
             if self.transferred_bytes != self.expected_bytes:
@@ -199,7 +210,6 @@ def open_upstream_range(
     request_range,
     ledger,
     session=None,
-    allow_partial_budget=False,
 ):
     """Open one upstream request without exposing its signed URL in telemetry."""
     parse_request_range(request_range)
@@ -220,7 +230,6 @@ def open_upstream_range(
         response,
         request_range,
         ledger,
-        allow_partial_budget=allow_partial_budget,
     )
 
 
@@ -260,7 +269,6 @@ class RangeGuard:
                         request_range,
                         guard._ledger,
                         session=guard._session,
-                        allow_partial_budget=True,
                     )
                     self.send_response(206)
                     self.send_header("Content-Range", upstream.content_range)

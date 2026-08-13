@@ -146,6 +146,78 @@ def test_finite_request_over_budget_is_rejected_before_body_read():
     assert ledger.total_upstream_bytes == 0
 
 
+def test_open_ended_response_does_not_reserve_full_budget_before_read():
+    response = partial_response(b"0123456789", total=10_000_000_000)
+    ledger = TransferLedger(8)
+
+    upstream = open_upstream_range(
+        "https://origin.invalid/private",
+        "bytes=0-",
+        ledger,
+        session=FakeSession([response]),
+    )
+
+    reservation = ledger.reserve(8)
+    assert reservation == 8
+    assert response.raw.bytes_read == 0
+
+    ledger.release(reservation)
+    upstream.abort("CLIENT_CLOSED")
+
+
+def test_concurrent_open_ended_responses_share_budget_as_they_read():
+    ledger = TransferLedger(8)
+    first = open_upstream_range(
+        "https://origin.invalid/private",
+        "bytes=0-",
+        ledger,
+        session=FakeSession(
+            [partial_response(b"abcdefghijkl", total=10_000_000_000)]
+        ),
+    )
+    second = open_upstream_range(
+        "https://origin.invalid/private",
+        "bytes=100-",
+        ledger,
+        session=FakeSession(
+            [partial_response(b"mnopqrstuvwx", start=100, total=10_000_000_000)]
+        ),
+    )
+
+    first_chunks = first.iter_content(chunk_size=4)
+    second_chunks = second.iter_content(chunk_size=4)
+    assert next(first_chunks) == b"abcd"
+    assert next(second_chunks) == b"mnop"
+    assert ledger.total_upstream_bytes == 8
+
+    first.abort("CLIENT_CLOSED")
+    second.abort("CLIENT_CLOSED")
+    first_chunks.close()
+    second_chunks.close()
+
+
+def test_open_ended_client_close_counts_only_bytes_already_read():
+    response = partial_response(b"01234", total=10_000_000_000)
+    ledger = TransferLedger(10)
+    upstream = open_upstream_range(
+        "https://origin.invalid/private",
+        "bytes=0-",
+        ledger,
+        session=FakeSession([response]),
+    )
+
+    chunks = upstream.iter_content(chunk_size=10)
+    assert next(chunks) == b"01234"
+    upstream.abort("CLIENT_CLOSED")
+    chunks.close()
+
+    assert ledger.total_upstream_bytes == 5
+    assert response.raw.bytes_read == 5
+    assert ledger.events[0]["bytes_transferred"] == 5
+    assert ledger.events[0]["outcome"] == "CLIENT_CLOSED"
+    assert ledger.reserve(5) == 5
+
+
 def test_open_ended_request_stops_exactly_at_hard_budget():
     response = partial_response(b"0123456789")
     ledger = TransferLedger(6)
@@ -154,7 +226,6 @@ def test_open_ended_request_stops_exactly_at_hard_budget():
         "bytes=0-",
         ledger,
         session=FakeSession([response]),
-        allow_partial_budget=True,
     )
 
     with pytest.raises(TransferBudgetExceeded):
