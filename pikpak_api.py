@@ -61,7 +61,7 @@ def get_captcha_token(device_id, client_id, client_version, package_name):
     resp.raise_for_status()
     return resp.json().get('captcha_token', '')
 
-def get_media_variants(share_url):
+def _get_media_variants_with_filename(share_url):
     match = re.search(r'/s/([^/]+)', share_url)
     if not match:
         raise ValueError("Invalid PikPak share URL")
@@ -120,6 +120,11 @@ def get_media_variants(share_url):
         
     return medias, file_name
 
+def get_media_variants(share_url):
+    """Return the media variants without changing the established public API."""
+    medias, _ = _get_media_variants_with_filename(share_url)
+    return medias
+
 def download_range(url, bytes_range="0-65535", max_bytes=65536):
     headers = {'Range': f'bytes={bytes_range}'}
     resp = requests.get(url, headers=headers, stream=True)
@@ -177,7 +182,7 @@ def get_origin_url(share_url):
     Discover the Origin URL from the share file info.
     It inspects the medias[] array for the is_origin flag or category_origin.
     """
-    medias, _ = get_media_variants(share_url)
+    medias = get_media_variants(share_url)
     for m in medias:
         if m.get('is_origin') or m.get('category') == 'category_origin':
             if 'link' in m and 'url' in m['link']:
@@ -190,7 +195,7 @@ def get_proxy_url(share_url):
     Discover the 480P proxy URL and original filename from the share file info.
     Returns (url, filename)
     """
-    medias, filename = get_media_variants(share_url)
+    medias, filename = _get_media_variants_with_filename(share_url)
     for m in medias:
         if str(m.get('resolution_name')).upper() == '480P':
             if 'link' in m and 'url' in m['link']:
@@ -204,7 +209,7 @@ def download_proxy_video(share_url, output_path):
     """
     import urllib.request
     
-    proxy_url = get_proxy_url(share_url)
+    proxy_url, _ = get_proxy_url(share_url)
     
     # We will use streaming requests or just a simple download tool
     # Here we can just use requests with streaming to download it to file
