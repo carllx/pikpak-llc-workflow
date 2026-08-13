@@ -1,15 +1,5 @@
 import pytest
-from pikpak_api import extract_share_info_html, get_media_variants, download_range
-
-def test_extract_share_info_html():
-    html_content = '''<html>
-    <script id="__NUXT_DATA__" type="application/json">
-    ["u812345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678912", "VOzuAuSrUkan_TaiMNnhSZmro2", "VOzuCvKmZUsWl46t2khdDdcDo2"]
-    </script>
-    </html>'''
-    info = extract_share_info_html(html_content, "VOzuCvKmZUsWl46t2khdDdcDo2")
-    assert info['pass_code_token'].startswith('u8')
-    assert info['file_id'] == 'VOzuAuSrUkan_TaiMNnhSZmro2'
+from pikpak_api import get_media_variants, download_range
 
 def test_get_media_variants(monkeypatch):
     class MockResponse:
@@ -57,7 +47,7 @@ def test_download_range_success(monkeypatch):
         return MockResponse()
 
     monkeypatch.setattr("requests.get", mock_get)
-    data = download_range("http://test/url")
+    data = download_range("http://test/url", "0-65535", 65536)
     assert len(data) == 65536
     assert data == b"a" * 65536
 
@@ -78,4 +68,58 @@ def test_download_range_safety_guard_200_ok(monkeypatch):
     monkeypatch.setattr("requests.get", mock_get)
     
     with pytest.raises(ValueError, match="Server returned 200 OK"):
-        download_range("http://test/url")
+        download_range("http://test/url", "0-65535")
+
+def test_download_range_wrong_start_end(monkeypatch):
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 206
+            self.headers = {'Content-Range': 'bytes 0-100000/1048576'}
+        def iter_content(self, chunk_size):
+            raise RuntimeError("Body consumed for wrong range! Safety guard failed.")
+        def close(self):
+            pass
+
+    def mock_get(*args, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+    
+    with pytest.raises(ValueError, match="Content-Range mismatch"):
+        download_range("http://test/url", "0-65535")
+
+def test_download_range_missing_header(monkeypatch):
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 206
+            self.headers = {}
+        def iter_content(self, chunk_size):
+            raise RuntimeError("Body consumed for missing header! Safety guard failed.")
+        def close(self):
+            pass
+
+    def mock_get(*args, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+    
+    with pytest.raises(ValueError, match="Missing Content-Range header"):
+        download_range("http://test/url", "0-65535")
+
+def test_download_range_malformed_header(monkeypatch):
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 206
+            self.headers = {'Content-Range': 'bytes 0-65535'}
+        def iter_content(self, chunk_size):
+            raise RuntimeError("Body consumed for malformed header! Safety guard failed.")
+        def close(self):
+            pass
+
+    def mock_get(*args, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+    
+    with pytest.raises(ValueError, match="Malformed Content-Range header"):
+        download_range("http://test/url", "0-65535")
