@@ -180,3 +180,39 @@ def get_origin_url(share_url):
                 return m['link']['url']
     
     raise ValueError("Origin media not found in the variants.")
+
+def get_proxy_url(share_url):
+    """
+    Discover the 480P proxy URL from the share file info.
+    """
+    medias = get_media_variants(share_url)
+    for m in medias:
+        if str(m.get('resolution_name')).upper() == '480P':
+            if 'link' in m and 'url' in m['link']:
+                return m['link']['url']
+                
+    # Fallback to the first non-origin media if 480P doesn't exist
+    for m in medias:
+        if not m.get('is_origin') and m.get('category') != 'category_origin':
+            if 'link' in m and 'url' in m['link']:
+                return m['link']['url']
+                
+    raise ValueError("Proxy media (480P) not found in the variants.")
+
+def download_proxy_video(share_url, output_path):
+    """
+    Downloads the 480P proxy video completely.
+    """
+    import urllib.request
+    
+    proxy_url = get_proxy_url(share_url)
+    
+    # We will use streaming requests or just a simple download tool
+    # Here we can just use requests with streaming to download it to file
+    with requests.get(proxy_url, stream=True) as r:
+        r.raise_for_status()
+        with open(output_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192): 
+                if chunk:
+                    f.write(chunk)
+
