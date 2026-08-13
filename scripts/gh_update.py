@@ -148,7 +148,7 @@ for i in range(1, 6):
     # write body to temp file to avoid quoting issues
     with open("temp_body.md", "w", encoding="utf-8") as f:
         f.write(issue_updates[i]["body"])
-    
+
     run_cmd(f'gh issue edit {i} --title "{issue_updates[i]["title"]}" --body-file temp_body.md --add-label "ready-for-agent" --remove-label "needs-triage"')
     print(f"Issue #{i} updated.")
 

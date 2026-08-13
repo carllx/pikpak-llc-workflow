@@ -33,6 +33,51 @@ def test_get_media_variants(monkeypatch):
     assert len(medias) == 2
     assert medias[0]['resolution_name'] == '480P'
 
+def test_get_proxy_url_includes_filename_without_changing_media_api(monkeypatch):
+    monkeypatch.setattr(
+        "pikpak_api._get_media_variants_with_filename",
+        lambda url: (
+            [{"resolution_name": "480P", "link": {"url": "http://test/480p"}}],
+            "source.mkv",
+        ),
+    )
+
+    from pikpak_api import get_proxy_url
+
+    assert get_proxy_url("https://mypikpak.com/s/share123") == (
+        "http://test/480p",
+        "source.mkv",
+    )
+
+def test_download_proxy_video_passes_only_url_to_requests(monkeypatch, tmp_path):
+    class MockResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def raise_for_status(self):
+            pass
+        def iter_content(self, chunk_size):
+            yield b"proxy"
+
+    requested = []
+    monkeypatch.setattr(
+        "pikpak_api.get_proxy_url",
+        lambda url: ("http://test/480p", "source.mkv"),
+    )
+    monkeypatch.setattr(
+        "requests.get",
+        lambda url, **kwargs: requested.append(url) or MockResponse(),
+    )
+
+    from pikpak_api import download_proxy_video
+
+    output = tmp_path / "proxy.bin"
+    download_proxy_video("https://mypikpak.com/s/share123", output)
+
+    assert requested == ["http://test/480p"]
+    assert output.read_bytes() == b"proxy"
+
 def test_get_origin_url_success(monkeypatch):
     class MockResponse:
         def __init__(self, json_data, status_code=200):

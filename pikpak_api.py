@@ -61,7 +61,7 @@ def get_captcha_token(device_id, client_id, client_version, package_name):
     resp.raise_for_status()
     return resp.json().get('captcha_token', '')
 
-def get_media_variants(share_url):
+def _get_media_variants_with_filename(share_url):
     match = re.search(r'/s/([^/]+)', share_url)
     if not match:
         raise ValueError("Invalid PikPak share URL")
@@ -85,14 +85,18 @@ def get_media_variants(share_url):
     
     share_data = resp.json()
     file_id = None
+    file_name = "download"
     pass_code_token = share_data.get('pass_code_token', '')
     
     if 'file' in share_data:
         file_id = share_data['file'].get('id')
+        file_name = share_data['file'].get('name', file_name)
     elif 'share' in share_data:
         file_id = share_data['share'].get('file_id')
+        file_name = share_data['share'].get('file_name', file_name)
     elif 'files' in share_data and share_data['files']:
         file_id = share_data['files'][0].get('id')
+        file_name = share_data['files'][0].get('name', file_name)
 
     if not file_id:
         raise ValueError(f"Could not extract file_id from API response. Got keys: {list(share_data.keys())}")
@@ -114,6 +118,11 @@ def get_media_variants(share_url):
     if not medias:
         raise ValueError(f"No medias found. Found keys: {list(file_info.keys())}")
         
+    return medias, file_name
+
+def get_media_variants(share_url):
+    """Return the media variants without changing the established public API."""
+    medias, _ = _get_media_variants_with_filename(share_url)
     return medias
 
 def download_range(url, bytes_range="0-65535", max_bytes=65536):
@@ -180,3 +189,34 @@ def get_origin_url(share_url):
                 return m['link']['url']
     
     raise ValueError("Origin media not found in the variants.")
+
+def get_proxy_url(share_url):
+    """
+    Discover the 480P proxy URL and original filename from the share file info.
+    Returns (url, filename)
+    """
+    medias, filename = _get_media_variants_with_filename(share_url)
+    for m in medias:
+        if str(m.get('resolution_name')).upper() == '480P':
+            if 'link' in m and 'url' in m['link']:
+                return m['link']['url'], filename
+                
+    raise ValueError("Proxy media (480P) strictly not found in the variants. No silent fallback allowed.")
+
+def download_proxy_video(share_url, output_path):
+    """
+    Downloads the 480P proxy video completely.
+    """
+    import urllib.request
+    
+    proxy_url, _ = get_proxy_url(share_url)
+    
+    # We will use streaming requests or just a simple download tool
+    # Here we can just use requests with streaming to download it to file
+    with requests.get(proxy_url, stream=True) as r:
+        r.raise_for_status()
+        with open(output_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192): 
+                if chunk:
+                    f.write(chunk)
+
