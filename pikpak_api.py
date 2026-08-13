@@ -167,3 +167,16 @@ def download_range(url, bytes_range="0-65535", max_bytes=65536):
         raise ValueError(f"Incomplete download: expected {expected_length} bytes, got {len(result)} bytes")
         
     return result
+
+def get_origin_url(share_url):
+    """
+    Discover the Origin URL from the share file info.
+    It inspects the medias[] array for the is_origin flag or category_origin.
+    """
+    medias = get_media_variants(share_url)
+    for m in medias:
+        if m.get('is_origin') or m.get('category') == 'category_origin' or str(m.get('media_name')).lower() == 'original':
+            if 'link' in m and 'url' in m['link']:
+                return m['link']['url']
+    
+    raise ValueError("Origin media not found in the variants.")

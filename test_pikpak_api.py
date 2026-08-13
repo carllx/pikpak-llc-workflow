@@ -33,6 +33,69 @@ def test_get_media_variants(monkeypatch):
     assert len(medias) == 2
     assert medias[0]['resolution_name'] == '480P'
 
+def test_get_origin_url_success(monkeypatch):
+    class MockResponse:
+        def __init__(self, json_data, status_code=200):
+            self.json_data = json_data
+            self.status_code = status_code
+        def json(self):
+            return self.json_data
+        def raise_for_status(self):
+            pass
+
+    def mock_post(*args, **kwargs):
+        return MockResponse({'captcha_token': 'test_token'})
+        
+    def mock_get(url, *args, **kwargs):
+        if 'drive/v1/share?' in url:
+            return MockResponse({'share': {'file_id': 'file123'}})
+        if 'file_info' in url:
+            return MockResponse({
+                'medias': [
+                    {'resolution_name': '480P', 'link': {'url': 'http://test/480p'}},
+                    {'resolution_name': 'Original', 'is_origin': True, 'link': {'url': 'http://test/origin'}}
+                ]
+            })
+        return MockResponse({})
+
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setattr("requests.get", mock_get)
+
+    from pikpak_api import get_origin_url
+    url = get_origin_url("https://mypikpak.com/s/share123")
+    assert url == 'http://test/origin'
+
+def test_get_origin_url_not_found(monkeypatch):
+    class MockResponse:
+        def __init__(self, json_data, status_code=200):
+            self.json_data = json_data
+            self.status_code = status_code
+        def json(self):
+            return self.json_data
+        def raise_for_status(self):
+            pass
+
+    def mock_post(*args, **kwargs):
+        return MockResponse({'captcha_token': 'test_token'})
+        
+    def mock_get(url, *args, **kwargs):
+        if 'drive/v1/share?' in url:
+            return MockResponse({'share': {'file_id': 'file123'}})
+        if 'file_info' in url:
+            return MockResponse({
+                'medias': [
+                    {'resolution_name': '480P', 'link': {'url': 'http://test/480p'}}
+                ]
+            })
+        return MockResponse({})
+
+    monkeypatch.setattr("requests.post", mock_post)
+    monkeypatch.setattr("requests.get", mock_get)
+
+    from pikpak_api import get_origin_url
+    with pytest.raises(ValueError, match="Origin media not found"):
+        get_origin_url("https://mypikpak.com/s/share123")
+
 def test_download_range_success(monkeypatch):
     class MockResponse:
         def __init__(self):
