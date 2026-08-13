@@ -123,3 +123,21 @@ def test_download_range_malformed_header(monkeypatch):
     
     with pytest.raises(ValueError, match="Malformed Content-Range header"):
         download_range("http://test/url", "0-65535")
+
+def test_download_range_short_body(monkeypatch):
+    class MockResponse:
+        def __init__(self):
+            self.status_code = 206
+            self.headers = {'Content-Range': 'bytes 0-65535/1048576'}
+        def iter_content(self, chunk_size):
+            yield b"a" * 10000  # Only yields 10,000 bytes instead of 65,536
+        def close(self):
+            pass
+
+    def mock_get(*args, **kwargs):
+        return MockResponse()
+
+    monkeypatch.setattr("requests.get", mock_get)
+    
+    with pytest.raises(ValueError, match="Incomplete download"):
+        download_range("http://test/url", "0-65535", 65536)
