@@ -39,6 +39,32 @@ def download_proxy(share_url, output_path):
         print(f"\nError during download: {e}")
         sys.exit(1)
 
+    # Automatically transcode to highly compatible H.264 MP4 using FFmpeg if available
+    import subprocess
+    import shutil
+    if shutil.which("ffmpeg"):
+        print("FFmpeg found. Transcoding to highly compatible H.264 MP4 for LosslessCut...")
+        temp_output = output_path + ".tmp.mp4"
+        try:
+            # Re-encode video to h264 for maximum compatibility (some proxy TS are HEVC which Chromium/LosslessCut struggles with)
+            # -movflags +faststart optimizes the mp4 for web-seeking
+            cmd = [
+                "ffmpeg", "-y", "-i", output_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                temp_output
+            ]
+            subprocess.run(cmd, check=True)
+            # Replace original file with the transcoded one
+            import os
+            os.replace(temp_output, output_path)
+            print("Transcoding complete! File is ready for LosslessCut.")
+        except Exception as e:
+            print(f"FFmpeg transcoding failed (original file kept): {e}")
+    else:
+        print("Warning: FFmpeg not found on system PATH. Output may be an incompatible MPEG-TS stream disguised as .mp4.")
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print("Usage: python download_proxy.py <share_url> <output_file.mp4>")
