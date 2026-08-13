@@ -14,6 +14,16 @@ Using default canonical triage labels. See `docs/agents/triage-labels.md`.
 
 Single-context repository. See `docs/agents/domain.md`.
 
+## Pull Request Governance
+
+* Implementation / IDE Agent 不得自行 merge PR。
+* 完成实现后，只允许执行：tests、`/code-review`、commit、push、open/update PR、report，然后 STOP。
+* Browser Review Lead 是 merge gate。
+* 只有当前 review cycle 明确返回 `DECISION: APPROVE` 后，才允许 merge。
+* `REVISE` / `STOP` / `FROZEN` 状态绝对禁止 merge。
+* Agent 自己执行的 `/code-review` 不等于 Browser Review Lead approval。
+* 如果外部裁决尚未返回，默认状态是 `DO NOT MERGE`。
+
 ## 工程规范 (Engineering Rules)
 
 * **文件行数硬限制**：所有手写的源码和测试代码文件**不得超过 600 行**物理行数。
