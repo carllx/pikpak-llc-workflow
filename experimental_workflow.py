@@ -8,8 +8,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from llc_parser import parse_llc
-from pikpak_api import get_origin_url
+from llc_parser import parse_llc_project
+from pikpak_api import ShareMediaClient, select_share_video
 from range_guard import RangeGuard, TransferLedger, fetch_exact_range
 
 
@@ -37,6 +37,13 @@ def validate_segments(segments):
             raise WorkflowError(f"Segment {index} has a non-finite timestamp")
         if start < 0 or end <= start:
             raise WorkflowError(f"Segment {index} has an invalid time range")
+
+
+def resolve_llc_origin(share, llc_path):
+    project = parse_llc_project(llc_path)
+    client = ShareMediaClient.open(normalize_share_url(share))
+    selected = select_share_video(client.files, project.get("mediaFileName"))
+    return project["cutSegments"], client.origin_for_file(selected["file_id"])
 
 
 def run_command(command, expect_json=False):
@@ -355,9 +362,8 @@ def segments_mode(share, llc_path, output_dir, max_origin_bytes):
     report = _initial_report("segments", max_origin_bytes)
     ledger = TransferLedger(max_origin_bytes)
     try:
-        segments = parse_llc(llc_path)
+        segments, origin_url = resolve_llc_origin(share, llc_path)
         validate_segments(segments)
-        origin_url = get_origin_url(normalize_share_url(share))
         _, origin_total = fetch_exact_range(origin_url, PROBE_RANGE, ledger)
         outputs, probes, source_inventory = extract_with_guard(
             origin_url, segments, output_dir, ledger
@@ -395,10 +401,9 @@ def verify_mode(
     report = _initial_report("verify", max_origin_bytes)
     ledger = TransferLedger(max_origin_bytes)
     try:
-        segments = parse_llc(llc_path)
+        segments, origin_url = resolve_llc_origin(share, llc_path)
         validate_segments(segments)
         first_segment = segments[0]
-        origin_url = get_origin_url(normalize_share_url(share))
         _, origin_total = fetch_exact_range(origin_url, PROBE_RANGE, ledger)
         report["ORIGIN_TOTAL"] = origin_total
 

@@ -1,7 +1,18 @@
 import json5
 import os
 
-def parse_llc(file_path):
+def _load_llc(file_path):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"LLC file not found: {file_path}")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    try:
+        return json5.loads(content)
+    except Exception as e:
+        raise ValueError(f"Failed to parse LLC JSON5 file: {e}")
+
+
+def parse_llc_project(file_path):
     """
     Parses a LosslessCut v3.69.0 project file (.llc).
     
@@ -11,16 +22,7 @@ def parse_llc(file_path):
     Returns:
         list[dict]: A list of segments with 'start' and 'end' float values.
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"LLC file not found: {file_path}")
-        
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-        
-    try:
-        data = json5.loads(content)
-    except Exception as e:
-        raise ValueError(f"Failed to parse LLC JSON5 file: {e}")
+    data = _load_llc(file_path)
         
     extracted_segments = []
     
@@ -45,7 +47,15 @@ def parse_llc(file_path):
                 "end": end_val
             })
             
-    return extracted_segments
+    return {
+        "mediaFileName": data.get("mediaFileName"),
+        "cutSegments": extracted_segments,
+    }
+
+
+def parse_llc(file_path):
+    """Compatibility wrapper returning only validated cut segments."""
+    return parse_llc_project(file_path)["cutSegments"]
 
 if __name__ == "__main__":
     import sys

@@ -5,6 +5,17 @@ import requests
 import uuid
 import time
 import hashlib
+from pathlib import Path
+
+
+VIDEO_EXTENSIONS = {
+    ".3gp", ".avi", ".flv", ".m2ts", ".m4v", ".mkv", ".mov",
+    ".mp4", ".mpeg", ".mpg", ".mts", ".ts", ".webm", ".wmv",
+}
+
+
+class ProxyVariantNotFound(ValueError):
+    pass
 
 def get_default_headers(device_id, client_id, client_version, package_name):
     return {
@@ -61,67 +72,156 @@ def get_captcha_token(device_id, client_id, client_version, package_name):
     resp.raise_for_status()
     return resp.json().get('captcha_token', '')
 
+def _candidate_type(item, direct_file=False):
+    kind = str(item.get("kind") or item.get("type") or "").lower()
+    if "folder" in kind:
+        return "non_video"
+    mime_type = str(item.get("mime_type") or item.get("mimeType") or "").lower()
+    category = str(item.get("category") or "").lower()
+    filename = item.get("name") or item.get("file_name") or ""
+    if mime_type.startswith("video/") or category in {"video", "category_video"}:
+        return "video"
+    if Path(filename).suffix.lower() in VIDEO_EXTENSIONS:
+        return "video"
+    return "video" if direct_file and not mime_type and not category else "non_video"
+
+
+def _share_items(share_data):
+    if isinstance(share_data.get("file"), dict):
+        return [(share_data["file"], True)]
+    if isinstance(share_data.get("share"), dict):
+        item = {
+            "id": share_data["share"].get("file_id"),
+            "name": share_data["share"].get("file_name", "download"),
+            "mime_type": share_data["share"].get("mime_type"),
+            "category": share_data["share"].get("category"),
+        }
+        return [(item, True)]
+    return [(item, False) for item in share_data.get("files", [])]
+
+
+class ShareMediaClient:
+    """One resolved Share session with stable file-id media access."""
+
+    def __init__(self, share_id, pass_code_token, headers, files):
+        self.share_id = share_id
+        self.pass_code_token = pass_code_token
+        self.headers = headers
+        self.files = files
+
+    @classmethod
+    def open(cls, share_url):
+        match = re.search(r'/s/([^/]+)', share_url)
+        if not match:
+            raise ValueError("Invalid PikPak share URL")
+        share_id = match.group(1)
+        device_id = uuid.uuid4().hex
+        client_id = "YUMx5nI8ZU8Ap8pm"
+        client_version = "2.0.0"
+        package_name = "mypikpak.com"
+        captcha_token = get_captcha_token(
+            device_id, client_id, client_version, package_name
+        )
+        headers = get_default_headers(
+            device_id, client_id, client_version, package_name
+        )
+        if captcha_token:
+            headers['x-captcha-token'] = captcha_token
+        detail_url = (
+            "https://api-drive.mypikpak.com/drive/v1/share"
+            f"?share_id={share_id}"
+        )
+        response = requests.get(detail_url, headers=headers)
+        response.raise_for_status()
+        share_data = response.json()
+        files = []
+        for item, direct_file in _share_items(share_data):
+            file_id = item.get("id")
+            if not file_id:
+                continue
+            files.append(
+                {
+                    "file_id": file_id,
+                    "filename": item.get("name", "download"),
+                    "candidate_type": _candidate_type(item, direct_file),
+                }
+            )
+        if not files:
+            raise ValueError("Share contains no identifiable files")
+        return cls(
+            share_id,
+            share_data.get('pass_code_token', ''),
+            headers,
+            files,
+        )
+
+    def media_variants_for_file(self, file_id):
+        if file_id not in {item["file_id"] for item in self.files}:
+            raise ValueError("file_id is not part of this Share")
+        info_url = (
+            "https://api-drive.mypikpak.com/drive/v1/share/file_info"
+            f"?share_id={self.share_id}&file_id={file_id}"
+            f"&pass_code_token={urllib.parse.quote(self.pass_code_token)}"
+        )
+        response = requests.get(info_url, headers=self.headers)
+        response.raise_for_status()
+        file_info = response.json()
+        medias = file_info.get("medias")
+        if medias is None:
+            medias = file_info.get("file_info", {}).get("medias")
+        if medias is None:
+            medias = file_info.get("file", {}).get("medias")
+        if not medias:
+            raise ValueError(f"No media variants found for file_id {file_id}")
+        return medias
+
+    def proxy_for_file(self, file_id):
+        for media in self.media_variants_for_file(file_id):
+            if str(media.get("resolution_name")).upper() == "480P":
+                url = media.get("link", {}).get("url")
+                if url:
+                    return url
+        raise ProxyVariantNotFound(f"480P proxy not found for file_id {file_id}")
+
+    def origin_for_file(self, file_id):
+        for media in self.media_variants_for_file(file_id):
+            if media.get("is_origin") or media.get("category") == "category_origin":
+                url = media.get("link", {}).get("url")
+                if url:
+                    return url
+        raise ValueError(f"Origin media not found for file_id {file_id}")
+
+
+def list_share_files(share_url):
+    return ShareMediaClient.open(share_url).files
+
+
+def get_media_variants_for_file(share_url, file_id):
+    return ShareMediaClient.open(share_url).media_variants_for_file(file_id)
+
+
+def get_proxy_for_file(share_url, file_id):
+    return ShareMediaClient.open(share_url).proxy_for_file(file_id)
+
+
+def get_origin_for_file(share_url, file_id):
+    return ShareMediaClient.open(share_url).origin_for_file(file_id)
+
+
+def _single_file_client(share_url):
+    client = ShareMediaClient.open(share_url)
+    if len(client.files) != 1:
+        raise ValueError("Single-file helper requires exactly one Share file")
+    return client, client.files[0]
+
+
 def _get_media_variants_with_filename(share_url):
-    match = re.search(r'/s/([^/]+)', share_url)
-    if not match:
-        raise ValueError("Invalid PikPak share URL")
-    share_id = match.group(1)
-    
-    device_id = uuid.uuid4().hex
-    client_id = "YUMx5nI8ZU8Ap8pm"
-    client_version = "2.0.0"
-    package_name = "mypikpak.com"
-    
-    captcha_token = get_captcha_token(device_id, client_id, client_version, package_name)
-    
-    headers = get_default_headers(device_id, client_id, client_version, package_name)
-    if captcha_token:
-        headers['x-captcha-token'] = captcha_token
-        
-    # 1. API-based share/detail
-    detail_url = f"https://api-drive.mypikpak.com/drive/v1/share?share_id={share_id}"
-    resp = requests.get(detail_url, headers=headers)
-    resp.raise_for_status()
-    
-    share_data = resp.json()
-    file_id = None
-    file_name = "download"
-    pass_code_token = share_data.get('pass_code_token', '')
-    
-    if 'file' in share_data:
-        file_id = share_data['file'].get('id')
-        file_name = share_data['file'].get('name', file_name)
-    elif 'share' in share_data:
-        file_id = share_data['share'].get('file_id')
-        file_name = share_data['share'].get('file_name', file_name)
-    elif 'files' in share_data and share_data['files']:
-        file_id = share_data['files'][0].get('id')
-        file_name = share_data['files'][0].get('name', file_name)
+    client, file = _single_file_client(share_url)
+    return client.media_variants_for_file(file["file_id"]), file["filename"]
 
-    if not file_id:
-        raise ValueError(f"Could not extract file_id from API response. Got keys: {list(share_data.keys())}")
-
-    # 2. Get file_info
-    info_url = f"https://api-drive.mypikpak.com/drive/v1/share/file_info?share_id={share_id}&file_id={file_id}&pass_code_token={urllib.parse.quote(pass_code_token)}"
-    info_resp = requests.get(info_url, headers=headers)
-    info_resp.raise_for_status()
-    file_info = info_resp.json()
-    
-    medias = []
-    if 'medias' in file_info:
-        medias = file_info['medias']
-    elif 'file_info' in file_info and 'medias' in file_info['file_info']:
-        medias = file_info['file_info']['medias']
-    elif 'file' in file_info and 'medias' in file_info['file']:
-        medias = file_info['file']['medias']
-        
-    if not medias:
-        raise ValueError(f"No medias found. Found keys: {list(file_info.keys())}")
-        
-    return medias, file_name
 
 def get_media_variants(share_url):
-    """Return the media variants without changing the established public API."""
+    """Compatibility wrapper returning a list for a single-file Share."""
     medias, _ = _get_media_variants_with_filename(share_url)
     return medias
 
@@ -202,6 +302,33 @@ def get_proxy_url(share_url):
                 return m['link']['url'], filename
                 
     raise ValueError("Proxy media (480P) strictly not found in the variants. No silent fallback allowed.")
+
+
+def _matching_stem(filename):
+    stem = Path(filename).stem.casefold()
+    for suffix in ("_h264", "-h264", "_p480", "-p480"):
+        if stem.endswith(suffix):
+            return stem[:-len(suffix)]
+    return stem
+
+
+def select_share_video(files, media_filename):
+    """Select one video by unique filename or normalized proxy stem."""
+    if not media_filename:
+        raise ValueError("LLC mediaFileName is required for source selection")
+    videos = [item for item in files if item["candidate_type"] == "video"]
+    requested_name = Path(media_filename).name.casefold()
+    exact = [item for item in videos if item["filename"].casefold() == requested_name]
+    matches = exact or [
+        item
+        for item in videos
+        if _matching_stem(item["filename"]) == _matching_stem(media_filename)
+    ]
+    if not matches:
+        raise ValueError("LLC mediaFileName does not match a Share video")
+    if len(matches) != 1:
+        raise ValueError("LLC mediaFileName matches multiple Share videos")
+    return matches[0]
 
 def download_proxy_video(share_url, output_path):
     """

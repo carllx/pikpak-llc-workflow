@@ -1,7 +1,7 @@
 import unittest
 import os
 import tempfile
-from llc_parser import parse_llc
+from llc_parser import parse_llc, parse_llc_project
 
 class TestLLCParser(unittest.TestCase):
     def setUp(self):
@@ -32,6 +32,12 @@ class TestLLCParser(unittest.TestCase):
         # Seg 4: 1003.248263 -> 1045.356133
         self.assertAlmostEqual(segments[3]["start"], 1003.248263, places=5)
         self.assertAlmostEqual(segments[3]["end"], 1045.356133, places=5)
+
+    def test_project_preserves_media_filename_for_source_matching(self):
+        project = parse_llc_project(self.fixture_path)
+
+        self.assertEqual(project["mediaFileName"], "proxy1_h264.mp4")
+        self.assertEqual(project["cutSegments"], parse_llc(self.fixture_path))
 
     def test_missing_cut_segments(self):
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".llc") as tf:

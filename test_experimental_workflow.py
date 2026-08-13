@@ -232,8 +232,9 @@ def test_verify_mode_emits_one_safe_acceptance_report(monkeypatch, tmp_path):
     share = "PRIVATE_SHARE_TOKEN"
     origin = "https://origin.invalid/file?token=SIGNED_SECRET"
     segment = {"start": 399.0, "end": 409.0}
-    monkeypatch.setattr(workflow, "parse_llc", lambda path: [segment])
-    monkeypatch.setattr(workflow, "get_origin_url", lambda url: origin)
+    monkeypatch.setattr(
+        workflow, "resolve_llc_origin", lambda share_value, path: ([segment], origin)
+    )
     monkeypatch.setattr(workflow, "RangeGuard", FakeGuard)
     monkeypatch.setattr(workflow.shutil, "which", lambda name: name)
     monkeypatch.setattr(workflow, "probe_media", lambda path: playable_probe("64"))
