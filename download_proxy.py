@@ -5,20 +5,30 @@ from pikpak_api import get_proxy_url
 import subprocess
 import shutil
 
-def check_hw_encoder():
-    """Check for available hardware encoders using FFmpeg."""
+def _can_encode_with(encoder):
+    """Return whether FFmpeg can actually encode one tiny frame."""
+    command = [
+        "ffmpeg", "-v", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+        "-frames:v", "1", "-an", "-c:v", encoder,
+        "-f", "null", "-",
+    ]
     try:
-        result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, check=True)
-        encoders = result.stdout
-        # Order of preference
-        if "h264_nvenc" in encoders:
-            return "h264_nvenc"
-        if "h264_qsv" in encoders:
-            return "h264_qsv"
-        if "h264_amf" in encoders:
-            return "h264_amf"
-    except:
-        pass
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+def check_hw_encoder():
+    """Select the first hardware encoder that passes a real encode probe."""
+    for encoder in ("h264_nvenc", "h264_qsv", "h264_amf"):
+        if _can_encode_with(encoder):
+            return encoder
     return "libx264"
 
 def download_proxy(share_url, output_path=None):
