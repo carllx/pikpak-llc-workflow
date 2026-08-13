@@ -5,21 +5,66 @@ from pikpak_api import get_proxy_url
 import subprocess
 import shutil
 
-def check_hw_encoder():
-    """Check for available hardware encoders using FFmpeg."""
+def build_encoder_args(encoder):
+    """Return the production encoding profile for a supported H.264 encoder."""
+    profiles = {
+        "h264_nvenc": [
+            "-c:v", "h264_nvenc", "-preset", "p4",
+            "-rc", "vbr", "-cq", "23", "-b:v", "0",
+        ],
+        "h264_qsv": [
+            "-c:v", "h264_qsv", "-preset", "fast",
+            "-global_quality", "23",
+        ],
+        "h264_amf": [
+            "-c:v", "h264_amf", "-quality", "balanced",
+            "-rc", "cqp", "-qp_i", "23", "-qp_p", "23",
+        ],
+        "libx264": [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        ],
+    }
     try:
-        result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, check=True)
-        encoders = result.stdout
-        # Order of preference
-        if "h264_nvenc" in encoders:
-            return "h264_nvenc"
-        if "h264_qsv" in encoders:
-            return "h264_qsv"
-        if "h264_amf" in encoders:
-            return "h264_amf"
-    except:
-        pass
+        return profiles[encoder].copy()
+    except KeyError as error:
+        raise ValueError(f"Unsupported encoder profile: {encoder}") from error
+
+def _can_encode_with(encoder):
+    """Probe one frame using the same profile as production transcoding."""
+    command = [
+        "ffmpeg", "-v", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+        "-frames:v", "1", "-an",
+        *build_encoder_args(encoder),
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+def check_hw_encoder():
+    """Select the first hardware encoder that passes a real encode probe."""
+    for encoder in ("h264_nvenc", "h264_qsv", "h264_amf"):
+        if _can_encode_with(encoder):
+            return encoder
     return "libx264"
+
+def build_transcode_command(input_path, output_path, encoder):
+    """Build the production FFmpeg command from the shared encoder profile."""
+    return [
+        "ffmpeg", "-y", "-i", input_path,
+        *build_encoder_args(encoder),
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        output_path,
+    ]
 
 def download_proxy(share_url, output_path=None):
     print("Resolving proxy URL for the provided share...")
@@ -78,18 +123,7 @@ def download_proxy(share_url, output_path=None):
         temp_output = final_mp4 + ".tmp.mp4"
         
         try:
-            cmd = [
-                "ffmpeg", "-y", "-i", output_path,
-                "-c:v", encoder, "-preset", "fast", "-crf" if encoder == "libx264" else "-cq", "23",
-                "-c:a", "aac",
-                "-movflags", "+faststart",
-                temp_output
-            ]
-            
-            # AMF uses different quality params usually, but for a proxy, defaults or CQ works well enough
-            if encoder == "h264_amf":
-                cmd = ["ffmpeg", "-y", "-i", output_path, "-c:v", encoder, "-quality", "balanced", "-c:a", "aac", "-movflags", "+faststart", temp_output]
-                
+            cmd = build_transcode_command(output_path, temp_output, encoder)
             subprocess.run(cmd, check=True)
             
             os.replace(temp_output, final_mp4)
