@@ -175,7 +175,7 @@ def get_origin_url(share_url):
     """
     medias = get_media_variants(share_url)
     for m in medias:
-        if m.get('is_origin') or m.get('category') == 'category_origin' or str(m.get('media_name')).lower() == 'original':
+        if m.get('is_origin') or m.get('category') == 'category_origin':
             if 'link' in m and 'url' in m['link']:
                 return m['link']['url']
     
