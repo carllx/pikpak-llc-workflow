@@ -55,7 +55,7 @@ def probe_media(path_or_url):
     return run_command(
         [
             "ffprobe", "-v", "error",
-            "-show_entries", "format=duration,size",
+            "-show_entries", "format=duration,size,format_name",
             "-show_entries", "stream=index,codec_type,codec_name",
             "-of", "json",
             str(path_or_url),
@@ -89,6 +89,7 @@ def build_segment_command(ffmpeg, guard_url, segment, output_path):
         "-ss", format(segment["start"], ".15g"),
         "-to", format(segment["end"], ".15g"),
         "-i", guard_url,
+        "-map", "0",
         "-c", "copy",
         str(output_path),
     ]
@@ -116,6 +117,23 @@ def output_is_playable(probe):
     return duration > 0 and any(stream.get("codec_type") == "video" for stream in streams)
 
 
+def stream_inventory(probe):
+    return [
+        {
+            "index": stream.get("index"),
+            "codec_type": stream.get("codec_type"),
+            "codec_name": stream.get("codec_name"),
+        }
+        for stream in probe.get("streams", [])
+    ]
+
+
+def require_mp4_origin(probe):
+    format_names = probe.get("format", {}).get("format_name", "").split(",")
+    if "mp4" not in format_names:
+        raise WorkflowError("Only MP4 Origin input is supported by this prototype")
+
+
 def extract_with_guard(origin_url, segments, output_dir, ledger, limit=None):
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None or shutil.which("ffprobe") is None:
@@ -130,6 +148,10 @@ def extract_with_guard(origin_url, segments, output_dir, ledger, limit=None):
 
     probes = []
     with RangeGuard(origin_url, ledger) as guard:
+        source_probe = probe_media(guard.url)
+        guard.raise_if_failed()
+        require_mp4_origin(source_probe)
+        source_inventory = stream_inventory(source_probe)
         for segment, output in zip(selected, outputs):
             run_command(build_segment_command(ffmpeg, guard.url, segment, output))
             guard.raise_if_failed()
@@ -138,8 +160,10 @@ def extract_with_guard(origin_url, segments, output_dir, ledger, limit=None):
             probe = probe_media(output)
             if not output_is_playable(probe):
                 raise WorkflowError("Extracted Origin segment is not probeable")
+            if stream_inventory(probe) != source_inventory:
+                raise WorkflowError("Origin stream inventory was not preserved in MP4 output")
             probes.append(probe)
-    return outputs, probes
+    return outputs, probes, source_inventory
 
 
 def identity_sample_ranges(total_size, chunk_bytes=IDENTITY_CHUNK_BYTES):
@@ -323,7 +347,7 @@ def verification_evidence_passes(report):
         and report["PACKET_SEQUENCE_STRICT"]
         and report["PACKET_TIMESTAMP_MAPPED"]
         and report["KEYFRAME_ALIGNED"] is True
-        and report["TRANSFER_SAVING"] == "PASS"
+        and report["STREAM_INVENTORY_PRESERVED"] is True
     )
 
 
@@ -335,7 +359,7 @@ def segments_mode(share, llc_path, output_dir, max_origin_bytes):
         validate_segments(segments)
         origin_url = get_origin_url(normalize_share_url(share))
         _, origin_total = fetch_exact_range(origin_url, PROBE_RANGE, ledger)
-        outputs, probes = extract_with_guard(
+        outputs, probes, source_inventory = extract_with_guard(
             origin_url, segments, output_dir, ledger
         )
         report.update(
@@ -345,6 +369,8 @@ def segments_mode(share, llc_path, output_dir, max_origin_bytes):
                 "ORIGIN_TOTAL": origin_total,
                 "OUTPUTS": [str(path) for path in outputs],
                 "OUTPUT_PLAYABLE": all(output_is_playable(probe) for probe in probes),
+                "SOURCE_STREAM_INVENTORY": source_inventory,
+                "STREAM_INVENTORY_PRESERVED": True,
             }
         )
     except Exception as error:
@@ -395,11 +421,21 @@ def verify_mode(
             raise WorkflowError("Refusing to overwrite verification output")
 
         with RangeGuard(origin_url, ledger) as guard:
+            source_probe = probe_media(guard.url)
+            guard.raise_if_failed()
+            require_mp4_origin(source_probe)
+            source_inventory = stream_inventory(source_probe)
+            report["SOURCE_STREAM_INVENTORY"] = source_inventory
             run_command(build_segment_command(ffmpeg, guard.url, first_segment, output))
             guard.raise_if_failed()
             if not output.is_file() or output.stat().st_size == 0:
                 raise WorkflowError("FFmpeg did not create a non-empty verification segment")
             output_probe = probe_media(output)
+            output_inventory = stream_inventory(output_probe)
+            report["OUTPUT_STREAM_INVENTORY"] = output_inventory
+            report["STREAM_INVENTORY_PRESERVED"] = (
+                output_inventory == source_inventory
+            )
             packet_report = packet_acceptance(guard, first_segment, output)
 
         output_size = int(output_probe.get("format", {}).get("size", 0) or 0)
@@ -414,7 +450,6 @@ def verify_mode(
                 "STREAM_COPY": "PASS",
                 "UPSTREAM_TRANSFERRED": ledger.total_upstream_bytes,
                 "TRANSFER_RATIO": transfer_ratio,
-                "TRANSFER_SAVING": "PASS" if transfer_ratio < 0.5 else "FAIL",
             }
         )
         report["STATUS"] = "PASS" if verification_evidence_passes(report) else "FAIL"

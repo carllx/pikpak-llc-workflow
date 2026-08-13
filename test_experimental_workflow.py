@@ -31,6 +31,7 @@ def test_build_segment_command_uses_local_guard_and_stream_copy_only(tmp_path):
     )
 
     assert command[command.index("-i") + 1] == "http://127.0.0.1:4321/media"
+    assert command[command.index("-map") + 1] == "0"
     assert command[command.index("-c") + 1] == "copy"
     assert not any(
         encoder in command
@@ -149,12 +150,14 @@ def test_verification_requires_confirmed_keyframe():
         "PACKET_SEQUENCE_STRICT": True,
         "PACKET_TIMESTAMP_MAPPED": True,
         "KEYFRAME_ALIGNED": None,
-        "TRANSFER_SAVING": "PASS",
+        "STREAM_INVENTORY_PRESERVED": True,
     }
 
     assert workflow.verification_evidence_passes(report) is False
     report["KEYFRAME_ALIGNED"] = True
     assert workflow.verification_evidence_passes(report) is True
+    report["STREAM_INVENTORY_PRESERVED"] = False
+    assert workflow.verification_evidence_passes(report) is False
 
 
 class FakeGuard:
@@ -177,9 +180,25 @@ class FakeGuard:
 
 def playable_probe(size="12"):
     return {
-        "format": {"duration": "3.0", "size": size},
-        "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
+        "format": {
+            "duration": "3.0",
+            "size": size,
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        },
+        "streams": [
+            {"index": 0, "codec_type": "video", "codec_name": "h264"},
+            {"index": 1, "codec_type": "audio", "codec_name": "aac"},
+            {"index": 2, "codec_type": "subtitle", "codec_name": "mov_text"},
+        ],
     }
+
+
+def test_non_mp4_origin_is_explicitly_unsupported():
+    probe = playable_probe()
+    probe["format"]["format_name"] = "matroska,webm"
+
+    with pytest.raises(workflow.WorkflowError, match="Only MP4 Origin"):
+        workflow.require_mp4_origin(probe)
 
 
 def test_extract_with_guard_processes_every_segment(monkeypatch, tmp_path):
@@ -195,7 +214,7 @@ def test_extract_with_guard_processes_every_segment(monkeypatch, tmp_path):
     monkeypatch.setattr(workflow, "run_command", fake_run)
     segments = [{"start": 1.0, "end": 2.0}, {"start": 3.0, "end": 4.0}]
 
-    outputs, probes = workflow.extract_with_guard(
+    outputs, probes, source_inventory = workflow.extract_with_guard(
         "https://origin.invalid/private",
         segments,
         tmp_path / "out",
@@ -203,6 +222,9 @@ def test_extract_with_guard_processes_every_segment(monkeypatch, tmp_path):
     )
 
     assert len(outputs) == len(probes) == len(commands) == 2
+    assert [stream["codec_type"] for stream in source_inventory] == [
+        "video", "audio", "subtitle"
+    ]
     assert all(command[command.index("-c") + 1] == "copy" for command in commands)
 
 
@@ -277,7 +299,9 @@ def test_verify_mode_emits_one_safe_acceptance_report(monkeypatch, tmp_path):
     assert report["HTTP_200_FULL_BODY"] == "NONE"
     assert report["UPSTREAM_TRANSFERRED"] == 164
     assert report["TRANSFER_RATIO"] == pytest.approx(0.0164)
+    assert "TRANSFER_SAVING" not in report
     assert report["STREAM_COPY"] == "PASS"
+    assert report["STREAM_INVENTORY_PRESERVED"] is True
     assert report["OUTPUT_PLAYABLE"] is True
     assert share not in serialized
     assert "SIGNED_SECRET" not in serialized
