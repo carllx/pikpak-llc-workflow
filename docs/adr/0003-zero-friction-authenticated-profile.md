@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Issue #22 implementation.
+Accepted
 
 ## Context
 
