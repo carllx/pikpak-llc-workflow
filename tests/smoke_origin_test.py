@@ -1,7 +1,7 @@
 import sys
 import os
 import traceback
-from pikpak_api import get_origin_url, download_range
+from pikpak_llc.pikpak_api import get_origin_url, download_range
 
 def run_smoke():
     share_url = os.environ.get("PIKPAK_TEST_SHARE_URL")

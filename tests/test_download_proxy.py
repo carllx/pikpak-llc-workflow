@@ -1,9 +1,10 @@
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import download_proxy
+from pikpak_llc import download_proxy
 
 
 def encoder_from(command):
@@ -186,6 +187,23 @@ def test_single_file_share_processes_its_only_video(monkeypatch, tmp_path):
     assert processed == [("proxy-one", "one.mp4", "one_h264.mp4", "libx264")]
 
 
+def test_normal_proxy_invocation_uses_one_workspace_job(monkeypatch, tmp_path):
+    client = FakeShareClient([video("one", "one.mp4")], {"one": "proxy-one"})
+    processed = install_proxy_batch(monkeypatch, client)
+
+    result = download_proxy.prepare_share_proxies(
+        "private-share", workspace_root=tmp_path / "workspace"
+    )
+
+    proxy_dir = Path(result["PROXY_DIR"])
+    segment_dir = Path(result["SEGMENTS_DIR"])
+    assert proxy_dir.name == "proxies"
+    assert segment_dir.name == "segments"
+    assert proxy_dir.parent == segment_dir.parent
+    assert result["files"][0]["status"] == "PASS"
+    assert processed[0][1:] == ("one.mp4", "one_h264.mp4", "libx264")
+
+
 def test_folder_share_processes_all_video_candidates(monkeypatch, tmp_path):
     client = FakeShareClient(
         [video("a", "a.mp4"), video("b", "b.mkv")],
@@ -225,6 +243,23 @@ def test_folder_with_zero_videos_fails_explicitly(monkeypatch):
 
     with pytest.raises(ValueError, match="zero video candidates"):
         download_proxy.download_proxy("private-share")
+
+
+def test_legacy_proxy_function_requires_an_explicit_output_path(monkeypatch):
+    client = FakeShareClient([video("one", "one.mp4")], {"one": "proxy-one"})
+    install_proxy_batch(monkeypatch, client)
+
+    with pytest.raises(ValueError, match="explicit output path"):
+        download_proxy.download_proxy("private-share")
+
+
+def test_legacy_proxy_function_rejects_repo_root_output(monkeypatch, tmp_path):
+    client = FakeShareClient([video("one", "one.mp4")], {"one": "proxy-one"})
+    install_proxy_batch(monkeypatch, client)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="repository root"):
+        download_proxy.download_proxy("private-share", "one.mp4")
 
 
 def test_missing_480p_fails_only_that_file_explicitly(monkeypatch, tmp_path):

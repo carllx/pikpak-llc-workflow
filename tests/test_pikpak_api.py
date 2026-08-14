@@ -1,5 +1,5 @@
 import pytest
-from pikpak_api import (
+from pikpak_llc.pikpak_api import (
     ShareMediaClient,
     download_range,
     get_media_variants,
@@ -20,7 +20,9 @@ class ApiResponse:
 
 def install_share_api(monkeypatch, share_data, variants_by_id):
     requested_file_ids = []
-    monkeypatch.setattr("pikpak_api.get_captcha_token", lambda *args: "captcha")
+    monkeypatch.setattr(
+        "pikpak_llc.pikpak_api.get_captcha_token", lambda *args: "captcha"
+    )
 
     def fake_get(url, **kwargs):
         if "file_info" not in url:
@@ -29,7 +31,7 @@ def install_share_api(monkeypatch, share_data, variants_by_id):
         requested_file_ids.append(file_id)
         return ApiResponse({"medias": variants_by_id[file_id]})
 
-    monkeypatch.setattr("pikpak_api.requests.get", fake_get)
+    monkeypatch.setattr("pikpak_llc.pikpak_api.requests.get", fake_get)
     return requested_file_ids
 
 def test_get_media_variants(monkeypatch):
@@ -66,14 +68,14 @@ def test_get_media_variants(monkeypatch):
 
 def test_get_proxy_url_includes_filename_without_changing_media_api(monkeypatch):
     monkeypatch.setattr(
-        "pikpak_api._get_media_variants_with_filename",
+        "pikpak_llc.pikpak_api._get_media_variants_with_filename",
         lambda url: (
             [{"resolution_name": "480P", "link": {"url": "http://test/480p"}}],
             "source.mkv",
         ),
     )
 
-    from pikpak_api import get_proxy_url
+    from pikpak_llc.pikpak_api import get_proxy_url
 
     assert get_proxy_url("https://mypikpak.com/s/share123") == (
         "http://test/480p",
@@ -93,7 +95,7 @@ def test_download_proxy_video_passes_only_url_to_requests(monkeypatch, tmp_path)
 
     requested = []
     monkeypatch.setattr(
-        "pikpak_api.get_proxy_url",
+        "pikpak_llc.pikpak_api.get_proxy_url",
         lambda url: ("http://test/480p", "source.mkv"),
     )
     monkeypatch.setattr(
@@ -101,7 +103,7 @@ def test_download_proxy_video_passes_only_url_to_requests(monkeypatch, tmp_path)
         lambda url, **kwargs: requested.append(url) or MockResponse(),
     )
 
-    from pikpak_api import download_proxy_video
+    from pikpak_llc.pikpak_api import download_proxy_video
 
     output = tmp_path / "proxy.bin"
     download_proxy_video("https://mypikpak.com/s/share123", output)
@@ -137,7 +139,7 @@ def test_get_origin_url_success(monkeypatch):
     monkeypatch.setattr("requests.post", mock_post)
     monkeypatch.setattr("requests.get", mock_get)
 
-    from pikpak_api import get_origin_url
+    from pikpak_llc.pikpak_api import get_origin_url
     url = get_origin_url("https://mypikpak.com/s/share123")
     assert url == 'http://test/origin'
 
@@ -169,7 +171,7 @@ def test_get_origin_url_category_fallback(monkeypatch):
     monkeypatch.setattr("requests.post", mock_post)
     monkeypatch.setattr("requests.get", mock_get)
 
-    from pikpak_api import get_origin_url
+    from pikpak_llc.pikpak_api import get_origin_url
     url = get_origin_url("https://mypikpak.com/s/share123")
     assert url == 'http://test/origin_fallback'
 
@@ -200,7 +202,7 @@ def test_get_origin_url_not_found(monkeypatch):
     monkeypatch.setattr("requests.post", mock_post)
     monkeypatch.setattr("requests.get", mock_get)
 
-    from pikpak_api import get_origin_url
+    from pikpak_llc.pikpak_api import get_origin_url
     with pytest.raises(ValueError, match="Origin media not found"):
         get_origin_url("https://mypikpak.com/s/share123")
 

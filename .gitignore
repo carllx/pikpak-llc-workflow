@@ -11,3 +11,8 @@ venv.bak/
 .vscode/
 .idea/
 .scratch/
+workspace/
+/*.mp4
+/*.llc
+/*.json
+/runtime/
