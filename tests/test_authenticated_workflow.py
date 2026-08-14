@@ -162,6 +162,62 @@ def test_missing_or_expired_profile_is_explicit_failure(monkeypatch, tmp_path):
 
     assert report["STATUS"] == "FAIL"
     assert report["LLC_RESULTS"][0]["ERROR_TYPE"] == "ProfileProvisioningRequired"
+    assert report["LLC_RESULTS"][0]["ERROR_CODE"] == "PROFILE_REQUIRED"
+    assert report["ROOT_CAUSE"] == "UNVERIFIED"
+
+
+def test_budget_blocked_before_extraction_records_not_run_not_fail(monkeypatch, tmp_path):
+    workspace, _ = prepare_job(tmp_path, ["movie.llc"])
+    configure_success(
+        monkeypatch,
+        {"movie.llc": "movie.mp4"},
+        [{"file_id": "one", "filename": "movie.mp4", "candidate_type": "video"}],
+    )
+    # 90s out of 100s will exceed hard_cap and trigger BudgetConfirmationRequired
+    monkeypatch.setattr(
+        workflow,
+        "parse_llc_project",
+        lambda path: {
+            "mediaFileName": "movie.mp4",
+            "cutSegments": [{"start": 0.0, "end": 90.0}],
+        },
+    )
+
+    report = workflow.run_latest_job(FakeTransport(), workspace.root)
+
+    assert report["STATUS"] == "FAIL"
+    assert report["SEGMENTS_TOTAL"] == 1
+    assert report["SEGMENTS_PASS"] == 0
+    assert report["SEGMENTS_FAIL"] == 0
+    assert report["SEGMENTS_NOT_RUN"] == 1
+    result = report["LLC_RESULTS"][0]
+    assert result["STATUS"] == "FAIL"
+    assert result["ERROR_CODE"] == "PROJECT_BUDGET_BLOCKED"
+    assert result["SEGMENTS_FAIL"] == 0
+    assert result["SEGMENTS_NOT_RUN"] == 1
+
+
+def test_extraction_failure_records_failed_segments(monkeypatch, tmp_path):
+    workspace, _ = prepare_job(tmp_path, ["movie.llc"])
+    configure_success(
+        monkeypatch,
+        {"movie.llc": "movie.mp4"},
+        [{"file_id": "one", "filename": "movie.mp4", "candidate_type": "video"}],
+        fail_output_for={"movie"},
+    )
+
+    report = workflow.run_latest_job(FakeTransport(), workspace.root)
+
+    assert report["STATUS"] == "FAIL"
+    assert report["SEGMENTS_TOTAL"] == 1
+    assert report["SEGMENTS_PASS"] == 0
+    assert report["SEGMENTS_FAIL"] == 1
+    assert report["SEGMENTS_NOT_RUN"] == 0
+    result = report["LLC_RESULTS"][0]
+    assert result["STATUS"] == "FAIL"
+    assert result["ERROR_CODE"] == "OUTPUT_VALIDATION_FAILED"
+    assert result["SEGMENTS_FAIL"] == 1
+    assert result["SEGMENTS_NOT_RUN"] == 0
 
 
 def test_daily_entrypoint_needs_no_user_arguments(monkeypatch, capsys):
