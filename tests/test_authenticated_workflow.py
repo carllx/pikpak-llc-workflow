@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 import json
 from pathlib import Path
+import pytest
 
 from pikpak_llc import authenticated_workflow as workflow
 from pikpak_llc.authenticated_transport import ProfileProvisioningRequired
@@ -55,13 +56,24 @@ def configure_success(monkeypatch, projects, share_files, fail_output_for=()):
             "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
         }
 
-    def fake_extract(url, selected, output, ledger):
-        if Path(output).name in fail_output_for:
-            raise RuntimeError("synthetic extraction failure")
-        return [Path(output) / "segment_001.mp4"], [], ["video:h264"]
+    def fake_extract_prog(url, selected, output_dir, ledger, segment_results):
+        if Path(output_dir).name in fail_output_for:
+            if segment_results:
+                segment_results[0].update(
+                    STATUS="FAIL",
+                    ERROR_CODE="OUTPUT_VALIDATION_FAILED",
+                    ERROR_TYPE="WorkflowError",
+                )
+            raise workflow.WorkflowError("synthetic extraction failure")
+        outputs = []
+        for i, entry in enumerate(segment_results, 1):
+            out_path = Path(output_dir) / f"segment_{i:03d}.mp4"
+            entry.update(STATUS="PASS", OUTPUT=str(out_path), ERROR_CODE=None, ERROR_TYPE=None)
+            outputs.append(out_path)
+        return outputs, [], ["video:h264"]
 
     monkeypatch.setattr(workflow, "probe_origin", fake_probe)
-    monkeypatch.setattr(workflow, "extract_with_guard", fake_extract)
+    monkeypatch.setattr(workflow, "extract_progressive_segments", fake_extract_prog)
 
 
 def test_one_llc_auto_budgets_without_user_paths_or_budget(monkeypatch, tmp_path):
@@ -218,6 +230,134 @@ def test_extraction_failure_records_failed_segments(monkeypatch, tmp_path):
     assert result["ERROR_CODE"] == "OUTPUT_VALIDATION_FAILED"
     assert result["SEGMENTS_FAIL"] == 1
     assert result["SEGMENTS_NOT_RUN"] == 0
+
+
+def test_mid_batch_segment_failure_accounting(monkeypatch, tmp_path):
+    workspace, _ = prepare_job(tmp_path, ["movie.llc"])
+    segments = [
+        {"start": 10.0, "end": 20.0},
+        {"start": 30.0, "end": 40.0},
+        {"start": 50.0, "end": 60.0},
+    ]
+    monkeypatch.setattr(
+        workflow,
+        "parse_llc_project",
+        lambda path: {
+            "mediaFileName": "movie.mp4",
+            "cutSegments": segments,
+        },
+    )
+    monkeypatch.setattr(
+        workflow.ShareMediaClient,
+        "open",
+        lambda share: type("Client", (), {"files": [{"file_id": "one", "filename": "movie.mp4", "candidate_type": "video"}]})(),
+    )
+
+    def fake_probe(url, ledger):
+        return {
+            "format": {"duration": "100", "format_name": "mov,mp4"},
+            "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
+        }
+
+    def fake_extract_prog(url, selected, output_dir, ledger, segment_results):
+        # Segment 1 PASS
+        segment_results[0].update(STATUS="PASS", OUTPUT=str(Path(output_dir) / "segment_001.mp4"))
+        # Segment 2 FAIL
+        segment_results[1].update(STATUS="FAIL", ERROR_CODE="FFMPEG_FAILED", ERROR_TYPE="WorkflowError")
+        # Segment 3 remains NOT_RUN
+        raise workflow.WorkflowError("ffmpeg mid-batch failure")
+
+    monkeypatch.setattr(workflow, "probe_origin", fake_probe)
+    monkeypatch.setattr(workflow, "extract_progressive_segments", fake_extract_prog)
+
+    report = workflow.run_latest_job(FakeTransport(), workspace.root)
+
+    assert report["STATUS"] == "FAIL"
+    assert report["SEGMENTS_TOTAL"] == 3
+    assert report["SEGMENTS_PASS"] == 1
+    assert report["SEGMENTS_FAIL"] == 1
+    assert report["SEGMENTS_NOT_RUN"] == 1
+
+    result = report["LLC_RESULTS"][0]
+    assert result["STATUS"] == "FAIL"
+    assert result["ERROR_CODE"] == "FFMPEG_FAILED"
+    assert result["SEGMENTS_TOTAL"] == 3
+    assert result["SEGMENTS_PASS"] == 1
+    assert result["SEGMENTS_FAIL"] == 1
+    assert result["SEGMENTS_NOT_RUN"] == 1
+    assert len(result["SEGMENT_RESULTS"]) == 3
+    assert result["SEGMENT_RESULTS"][0]["STATUS"] == "PASS"
+    assert result["SEGMENT_RESULTS"][1]["STATUS"] == "FAIL"
+    assert result["SEGMENT_RESULTS"][2]["STATUS"] == "NOT_RUN"
+
+
+def test_unknown_exception_maps_to_unclassified_failure(monkeypatch, tmp_path):
+    workspace, _ = prepare_job(tmp_path, ["movie.llc"])
+    configure_success(
+        monkeypatch,
+        {"movie.llc": "movie.mp4"},
+        [{"file_id": "one", "filename": "movie.mp4", "candidate_type": "video"}],
+    )
+
+    def fake_probe_error(url, ledger):
+        raise TypeError("completely unexpected python error")
+
+    monkeypatch.setattr(workflow, "probe_origin", fake_probe_error)
+
+    report = workflow.run_latest_job(FakeTransport(), workspace.root)
+
+    assert report["STATUS"] == "FAIL"
+    result = report["LLC_RESULTS"][0]
+    assert result["STATUS"] == "FAIL"
+    assert result["ERROR_CODE"] == "UNCLASSIFIED_FAILURE"
+    assert result["ERROR_TYPE"] == "TypeError"
+    assert result["ROOT_CAUSE"] == "UNVERIFIED"
+
+
+def test_extract_progressive_segments_direct(monkeypatch, tmp_path):
+    segments = [
+        {"start": 0.0, "end": 10.0},
+        {"start": 10.0, "end": 20.0},
+        {"start": 20.0, "end": 30.0},
+    ]
+    segment_results = [
+        {
+            "INDEX": idx,
+            "STATUS": "NOT_RUN",
+            "OUTPUT": str(tmp_path / f"segment_{idx:03d}.mp4"),
+            "ERROR_CODE": None,
+            "ERROR_TYPE": None,
+        }
+        for idx in range(1, 4)
+    ]
+    ledger = workflow.TransferLedger(1000)
+
+    def fake_run_command(cmd, expect_json=False):
+        out = Path(cmd[-1])
+        out.write_bytes(b"data")
+        return None
+
+    def fake_probe(path_or_url):
+        if "segment_002.mp4" in str(path_or_url):
+            raise workflow.WorkflowError("Extracted Origin segment is not probeable")
+        return {
+            "format": {"duration": "10", "format_name": "mov,mp4"},
+            "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
+        }
+
+    monkeypatch.setattr(workflow, "probe_media", fake_probe)
+    monkeypatch.setattr(workflow, "run_command", fake_run_command)
+
+    with pytest.raises(workflow.WorkflowError):
+        workflow.extract_progressive_segments(
+            "http://dummy", segments, tmp_path, ledger, segment_results
+        )
+
+    assert segment_results[0]["STATUS"] == "PASS"
+    assert segment_results[1]["STATUS"] == "FAIL"
+    assert segment_results[1]["ERROR_CODE"] == "OUTPUT_VALIDATION_FAILED"
+    assert segment_results[1]["ERROR_TYPE"] == "WorkflowError"
+    assert segment_results[2]["STATUS"] == "NOT_RUN"
 
 
 def test_daily_entrypoint_needs_no_user_arguments(monkeypatch, capsys):

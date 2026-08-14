@@ -18,6 +18,7 @@ class ErrorCode:
     SOURCE_MATCH_FAILED = "SOURCE_MATCH_FAILED"
     FFMPEG_FAILED = "FFMPEG_FAILED"
     OUTPUT_VALIDATION_FAILED = "OUTPUT_VALIDATION_FAILED"
+    UNCLASSIFIED_FAILURE = "UNCLASSIFIED_FAILURE"
 
 
 def classify_error(error):
@@ -35,14 +36,13 @@ def classify_error(error):
         if "exceeded limit" in detail or "budget" in detail or "fuse" in detail:
             return ErrorCode.HARD_FUSE_HIT
         return ErrorCode.AUTH_ORIGINAL_RANGE_FAILED
-    if isinstance(error, (WorkflowError, RuntimeError)):
+    if isinstance(error, WorkflowError):
         detail = str(error).casefold()
-        if any(marker in detail for marker in ("stream", "probeable", "playable", "inventory", "validation", "synthetic")):
+        if any(marker in detail for marker in ("stream", "probeable", "playable", "inventory")):
             return ErrorCode.OUTPUT_VALIDATION_FAILED
         if "ffmpeg" in detail:
             return ErrorCode.FFMPEG_FAILED
-        if isinstance(error, WorkflowError):
-            return ErrorCode.OUTPUT_VALIDATION_FAILED
+        return ErrorCode.OUTPUT_VALIDATION_FAILED
     if isinstance(error, (ValueError, KeyError)):
         return ErrorCode.SOURCE_MATCH_FAILED
-    return type(error).__name__
+    return ErrorCode.UNCLASSIFIED_FAILURE

@@ -6,7 +6,7 @@ This guide defines the deterministic diagnostic order for troubleshooting PikPak
 
 1. **416 != Expiration Evidence**: An HTTP 416 (Range Not Satisfiable) or CDN rejection on anonymous media links does not indicate token expiration or file corruption.
 2. **MEDIA_ORIGIN Failure != Missing File**: Anonymous `MEDIA_ORIGIN` links traverse public CDN edge caches that may behave differently from core storage.
-3. **Authenticated Original Finite Range is Authoritative**: Only a finite Range read via authenticated transport (`rclone --pikpak-no-media-link`) serves as definitive diagnostic evidence for file integrity.
+3. **Authenticated Original Finite Range is Authoritative**: Authenticated original finite Range is authoritative for availability of the tested original-file range. A failure only proves the tested range failed and must not be automatically extrapolated to entire file corruption.
 4. **File Existence != Successful Extraction**: A 0-byte or corrupt file on disk does not satisfy completion gates.
 5. **Exit Code 0 != Completion Gate**: Process termination with returncode 0 is insufficient; all outputs must pass strict media and stream validation.
 
@@ -43,8 +43,8 @@ Follow this exact diagnostic order. Do not jump directly to infrastructure corru
                ▼
    4. Authenticated Original Finite Range Probe
       - Test 64 KiB slice at target offset via authenticated rclone (--pikpak-no-media-link).
-      ├─ FAIL ──► Document actual exit code and bytes; record AUTH_ORIGINAL_BAD_RANGE.
-      └─ PASS ──► Disproves file corruption/hole hypotheses; proceed to Step 5.
+      ├─ FAIL ──► Document actual exit code and bytes; record AUTH_ORIGINAL_RANGE_FAILED (tested range failed; do not guess whole-file corruption).
+      └─ PASS ──► Disproves alleged physical hole at tested offset; proceed to Step 5.
                │
                ▼
    5. Integration & FFmpeg Execution
