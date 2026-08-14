@@ -20,3 +20,4 @@
 * **LLC Source Selection**：使用 LLC `mediaFileName` 与候选的唯一 filename/stem 匹配，再以匹配项的 `file_id` 获取 Origin；禁止用 API 数组位置选择源。
 * **Job Workspace**：一次 Share invocation 创建一个 `workspace/jobs/<job-id>/`。一个 Job 可包含多个 video proxies 与对应的多个 LLC；Origin 输出按 `segments/<source-stem>/` 隔离。`workspace/LATEST.txt` 指向当前 Job。
 * **Output Contract**：用户只需知道当前 Job 的绝对 `PROXY_DIR` 与 `SEGMENTS_DIR`。`projects/reports/temp`、credential、rclone 与 logs 均为内部实现细节。
+* **Authenticated Profile**：Windows 当前用户通过 DPAPI 保护的 PikPak rclone 配置。日常 Origin 工作流自动 materialize 临时配置、启动 loopback original-file transport，并在结束时清除明文；profile 与 runtime 均在 `%LOCALAPPDATA%\PikPakLLC\`，不进入 Git。

@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 from .workspace import JobWorkspace
+from .operator_preflight import OperatorPreflightError, run_operator_preflight
 
 def build_encoder_args(encoder):
     """Return the production encoding profile for a supported H.264 encoder."""
@@ -187,6 +188,11 @@ def prepare_share_proxies(share_url, workspace_root="workspace"):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    try:
+        run_operator_preflight()
+    except OperatorPreflightError as error:
+        print(json.dumps({"STATUS": "FAIL", "ERROR": error.code}))
+        return 1
     if len(args) < 1:
         print("Usage: python download_proxy.py <share_url> [output_file_or_dir]")
         return 1

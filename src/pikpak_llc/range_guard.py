@@ -69,6 +69,16 @@ class TransferLedger:
         with self._lock:
             self._events.append(event)
 
+    def increase_max_bytes(self, max_bytes):
+        """Increase a sequential workflow's hard fuse without resetting evidence."""
+        with self._lock:
+            new_max = int(max_bytes)
+            if new_max < self.max_bytes or new_max < (
+                self.total_upstream_bytes + self._reserved_bytes
+            ):
+                raise ValueError("Transfer budget can only be increased")
+            self.max_bytes = new_max
+
     @property
     def events(self):
         with self._lock:
