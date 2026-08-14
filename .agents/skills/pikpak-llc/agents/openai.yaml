@@ -1,6 +1,6 @@
 interface:
   display_name: "PikPak LLC Workflow"
   short_description: "运行代理下载、Origin 片段提取与一体化批量验收流程"
-  default_prompt: "使用 $pikpak-llc 继续我的 PikPak、LosslessCut 与 Origin 片段工作流。"
+  default_prompt: "帮我处理这个 PikPak Share，或继续当前 Job 的 LosslessCut Origin 片段。"
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

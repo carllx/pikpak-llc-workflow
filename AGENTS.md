@@ -14,6 +14,13 @@ Using default canonical triage labels. See `docs/agents/triage-labels.md`.
 
 Single-context repository. See `docs/agents/domain.md`.
 
+## Operational Workflow
+
+* 任何明确属于 PikPak→LosslessCut workflow 的用户操作（PikPak Share、其 proxy preparation、`.llc` 或 Origin segments），Agent 在执行项目命令前必须完整读取并遵循 `.agents/skills/pikpak-llc/SKILL.md`。
+* Agent 必须使用 Skill 指定的 production entrypoint 与 operator preflight；不得因为本地存在某个脚本就自行推断入口。
+* `origin_segment_extractor.py` 是 daily workflow 禁用的 legacy operator file。检测到它时报告 `LEGACY_OPERATOR_FILE_DETECTED` 并停止媒体操作，先按 cleanup manifest 隔离。
+* Daily media operations 只从 `E:\PROJECTS\pikpak-llc-workflow` 的 clean `master` 执行；开发工作只在 `_codex-temp-*` worktree 中进行。
+
 ## Pull Request Governance
 
 * Implementation / IDE Agent 不得自行 merge PR。

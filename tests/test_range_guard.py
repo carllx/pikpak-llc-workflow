@@ -178,6 +178,19 @@ def test_finite_request_over_budget_is_rejected_before_body_read():
     assert ledger.total_upstream_bytes == 0
 
 
+def test_transfer_ledger_can_raise_one_workflow_fuse_without_resetting_bytes():
+    ledger = TransferLedger(8)
+    ledger.reserve(5)
+    ledger.consume(5)
+
+    ledger.increase_max_bytes(20)
+
+    assert ledger.max_bytes == 20
+    assert ledger.total_upstream_bytes == 5
+    with pytest.raises(ValueError):
+        ledger.increase_max_bytes(19)
+
+
 def test_open_ended_response_does_not_reserve_full_budget_before_read():
     response = partial_response(b"0123456789", total=10_000_000_000)
     ledger = TransferLedger(8)

@@ -1,40 +1,47 @@
 ---
 name: pikpak-llc
-description: 运行 PikPak 代理下载、LosslessCut 片段提取与批量验收流程。
-disable-model-invocation: true
+description: 处理本仓库的 PikPak Share、proxy preparation、LosslessCut .llc 项目和 authenticated Origin segments。仅匹配 PikPak→LosslessCut 工作流，不用于其他媒体下载或剪辑。
 ---
 
 # PikPak LLC operator
 
-在项目根目录工作。根据用户当前产物选择一个模式，执行后报告完成标准与下一步。
+在 canonical operator worktree 工作。一个 Share invocation 是一个 Job；正常流程只向用户报告绝对 `PROXY_DIR` 与 `SEGMENTS_DIR`。
 
-## `proxy`
+## Preflight
 
-1. 获取 Share URL/token 和期望输出路径。
-2. 运行 `python download_proxy.py <share> [output]`。
-3. 对生成的 H.264 MP4 运行 `ffprobe`。
+1. 从 `E:\PROJECTS\pikpak-llc-workflow`、`master` 运行 daily workflow；开发只在 `_codex-temp-*` worktree 进行。
+2. 运行程序内置 operator preflight，确认 HEAD、production modules、Skill 和 tracked workflow source clean。
+3. 如果检测到 `origin_segment_extractor.py`，报告 `LEGACY_OPERATOR_FILE_DETECTED` 并停止；该文件是 legacy operator code，不是可选入口。
 
-完成标准：LosslessCut-compatible proxy 存在，且 `ffprobe` 成功。然后请用户在 LosslessCut 中剪辑并保存 `.llc`。
+完成标准：canonical/master/clean/module/Skill 全部 PASS，且 legacy extractor 不存在。
 
-## `segments`
+## Proxy：用户提供 Share
 
-1. 获取 Share URL/token、LLC 路径、空输出目录和用户确认的 Origin 传输上限。
-2. 运行 `python experimental_workflow.py segments <share> <project.llc> <output-dir> --max-origin-bytes <bytes>`。
-3. 读取单份 JSON report，不单独重跑其中已 PASS 的检查。
+1. 运行 `python download_proxy.py <share>`，创建 Job 并处理 Share 内全部 video candidates。
+2. 确认每个候选都有显式 PASS/FAIL；PASS 输出为 LosslessCut-compatible P480/H.264 且 `ffprobe` 成功。
+3. 返回 `PROXY_DIR`，请用户在 LosslessCut 中为所需视频保存 `.llc` 到当前 Job 的 `projects/`。
 
-完成标准：非空 `cutSegments` 已提取；所有输出存在且可 `ffprobe`；`STATUS=PASS`、`RANGE_ONLY=PASS`、`UPSTREAM_HTTP_206=PASS`、`HTTP_200_FULL_BODY=NONE`。
+完成标准：全部候选都有结果；成功 proxy 保留原 proxy 与 H.264 输出；不存在静默跳过。
 
-## `verify`
+## Origin：用户说 LLC 已完成
 
-1. 获取有效 Share、真实 LLC、空输出目录与 Origin 传输上限。如用户有 PikPak 官方下载文件，同时获取其路径。
-2. 一次运行 `python experimental_workflow.py verify <share> <project.llc> <output-dir> --max-origin-bytes <bytes> [--official-file <path>]`。
-3. 保留这一份 report 作为 evidence。整体 FAIL 时只调查 report 中的失败项。
+1. 从 `workspace/LATEST.txt` 定位当前 Job；自动发现 `projects/` 中全部 `.llc`。
+2. secure profile 有效时直接运行 `python -m pikpak_llc.authenticated_workflow`。
+3. profile 缺失或明确失效时，运行一次 `python -m pikpak_llc.profile_setup`，完成后自动重试 authenticated workflow。
+4. 检查 batch report：每个 LLC 都有 PASS/FAIL、唯一 source、outputs、budget 与实际 Range bytes；输出位于 `segments/<source-stem>/`。
+5. 返回 `SEGMENTS_DIR`。单项 FAIL 时只调查该项，不重跑已 PASS 的片段。
 
-完成标准：单份 report 包含 identity（提供官方文件时）、Range telemetry、累计传输量、packet mapping、preroll/keyframe 元数据与 playability，且 `STATUS=PASS`。
+完成标准：全部 LLC 被处理且无静默跳过；每个 PASS 项满足非空可播放输出、stream inventory preserved、`-map 0 -c copy`、RangeGuard PASS、仅 upstream 206、无 HTTP 200 body、累计 bytes 不超过自动 hard fuse。
 
-## 操作边界
+只有 batch `STATUS=PASS` 且每个 segment 均通过上述 completion gate，才向用户报告 Origin 下载成功。文件存在或进程 exit code 0 不构成成功。
 
-- Proxy Video 可做 H.264 transcode；Origin Segments 始终由 guarded localhost input 执行 stream copy。
-- 把 `--max-origin-bytes` 当作硬保险丝，使用户在执行前确认。
-- report 只传递安全 telemetry；不转述 signed Origin URL、token 或 private Share URL。
-- 真实流程成功后返回 evidence；保持 Issue #5 gate 与 PR #13 FROZEN。
+## Daily guardrails
+
+- 正常 Origin 入口固定为 `python -m pikpak_llc.authenticated_workflow`；`experimental_workflow.py segments` 仅保留 evidence/compatibility 用途，`origin_segment_extractor.py` 禁止用于 daily workflow。
+- 日常 Origin 从 LATEST Job 恢复 Share、LLC 和输出目录，并自动计算预算；不向用户索取 Share URL、LLC path、output path、`--max-origin-bytes`、rclone config、config password、file ID、file index 或 Range。
+- authenticated transport 使用 CurrentUser DPAPI、`%LOCALAPPDATA%\PikPakLLC`、loopback-only rclone 与 `--pikpak-no-media-link`；runtime 明文配置必须在 `finally` 清理。
+- report 只传递安全 telemetry；不转述 signed Origin URL、token、credential 或 private Share URL。
+
+## Evidence-only verify
+
+只有 Browser Review Lead 或用户明确要求正式 evidence 时，才运行 `experimental_workflow.py verify`。保留单份 report，整体 FAIL 时只调查其中失败项。
