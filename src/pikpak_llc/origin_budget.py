@@ -25,14 +25,32 @@ def estimate_origin_budget(
     confirmation_ratio=0.8,
 ):
     """Return a rounded hard fuse or fail when it loses partial-transfer value."""
-    values = (origin_total, source_duration, selected_duration, headroom, rounding)
+    values = (
+        origin_total,
+        source_duration,
+        selected_duration,
+        headroom,
+        rounding,
+        confirmation_ratio,
+    )
     if any(float(value) <= 0 for value in values) or seek_overhead < 0:
         raise ValueError("Origin budget inputs must be positive")
+    if confirmation_ratio >= 1.0:
+        raise ValueError("Confirmation ratio must be less than 1.0")
+
     estimated = int(origin_total * selected_duration / source_duration)
-    raw = estimated * headroom + seek_overhead
-    maximum = int(math.ceil(raw / rounding) * rounding)
-    if maximum >= origin_total * confirmation_ratio:
+    hard_cap = origin_total * confirmation_ratio
+    if estimated >= hard_cap:
         raise BudgetConfirmationRequired(
             "Estimated Origin fuse requires explicit high-budget confirmation"
         )
+
+    raw = estimated * headroom + seek_overhead
+    desired = math.ceil(raw / rounding) * rounding
+    if desired > hard_cap:
+        floored_cap = int(math.floor(hard_cap / rounding) * rounding)
+        maximum = floored_cap if floored_cap >= estimated else int(hard_cap)
+    else:
+        maximum = int(desired)
+
     return OriginBudget(estimated, maximum)
