@@ -41,6 +41,7 @@ description: 处理本仓库的 PikPak Share、proxy preparation、LosslessCut .
 - 日常 Origin 从 LATEST Job 恢复 Share、LLC 和输出目录，并自动计算预算；不向用户索取 Share URL、LLC path、output path、`--max-origin-bytes`、rclone config、config password、file ID、file index 或 Range。
 - authenticated transport 使用 CurrentUser DPAPI、`%LOCALAPPDATA%\PikPakLLC`、loopback-only rclone 与 `--pikpak-no-media-link`；runtime 明文配置必须在 `finally` 清理。
 - report 只传递安全 telemetry；不转述 signed Origin URL、token、credential 或 private Share URL。
+- 遇到任何 production FAIL 时，在进行任何诊断推断或代码变更前，必须完整读取并遵循 `docs/operations/origin-troubleshooting.md` 中的排障决策树；禁止直接在 canonical master 修改源码。
 
 ## Evidence-only verify
 
