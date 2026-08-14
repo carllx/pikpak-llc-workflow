@@ -7,7 +7,7 @@ import urllib.request
 
 import pytest
 
-from range_guard import (
+from pikpak_llc.range_guard import (
     RangeGuard,
     RangeGuardError,
     TransferBudgetExceeded,

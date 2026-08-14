@@ -1,7 +1,7 @@
 import unittest
 import os
 import tempfile
-from llc_parser import parse_llc, parse_llc_project
+from pikpak_llc.llc_parser import parse_llc, parse_llc_project
 
 class TestLLCParser(unittest.TestCase):
     def setUp(self):

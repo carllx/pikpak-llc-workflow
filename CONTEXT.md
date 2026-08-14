@@ -18,3 +18,5 @@
 * **Range Fetch**：使用 HTTP `Range` 头只下载文件的局部。
 * **Share Video Candidate**：Share 中可作为 Proxy/Origin 源的视频文件；由稳定 `file_id` 标识，并携带真实 `filename`。Folder Share 默认处理全部候选，非视频文件不参与。
 * **LLC Source Selection**：使用 LLC `mediaFileName` 与候选的唯一 filename/stem 匹配，再以匹配项的 `file_id` 获取 Origin；禁止用 API 数组位置选择源。
+* **Job Workspace**：一次 Share invocation 创建一个 `workspace/jobs/<job-id>/`。一个 Job 可包含多个 video proxies 与对应的多个 LLC；Origin 输出按 `segments/<source-stem>/` 隔离。`workspace/LATEST.txt` 指向当前 Job。
+* **Output Contract**：用户只需知道当前 Job 的绝对 `PROXY_DIR` 与 `SEGMENTS_DIR`。`projects/reports/temp`、credential、rclone 与 logs 均为内部实现细节。
