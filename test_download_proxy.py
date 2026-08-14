@@ -1,6 +1,8 @@
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 import download_proxy
 
 
@@ -136,3 +138,108 @@ def test_encoder_probe_treats_process_error_as_unavailable(monkeypatch):
 
     assert download_proxy.check_hw_encoder() == "h264_qsv"
     assert attempted == ["h264_nvenc", "h264_qsv"]
+
+
+class FakeShareClient:
+    def __init__(self, files, proxies):
+        self.files = files
+        self.proxies = proxies
+        self.requested = []
+
+    def proxy_for_file(self, file_id):
+        self.requested.append(file_id)
+        value = self.proxies[file_id]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def install_proxy_batch(monkeypatch, client):
+    processed = []
+    monkeypatch.setattr(
+        download_proxy.ShareMediaClient, "open", lambda share_url: client
+    )
+    monkeypatch.setattr(download_proxy.shutil, "which", lambda command: command)
+    monkeypatch.setattr(download_proxy, "check_hw_encoder", lambda: "libx264")
+    monkeypatch.setattr(
+        download_proxy,
+        "_download_and_transcode",
+        lambda url, raw, compatible, encoder: processed.append(
+            (url, raw.name, compatible.name, encoder)
+        ),
+    )
+    return processed
+
+
+def video(file_id, filename):
+    return {"file_id": file_id, "filename": filename, "candidate_type": "video"}
+
+
+def test_single_file_share_processes_its_only_video(monkeypatch, tmp_path):
+    client = FakeShareClient([video("one", "one.mp4")], {"one": "proxy-one"})
+    processed = install_proxy_batch(monkeypatch, client)
+
+    report = download_proxy.download_proxy("private-share", tmp_path)
+
+    assert [item["status"] for item in report] == ["PASS"]
+    assert client.requested == ["one"]
+    assert processed == [("proxy-one", "one.mp4", "one_h264.mp4", "libx264")]
+
+
+def test_folder_share_processes_all_video_candidates(monkeypatch, tmp_path):
+    client = FakeShareClient(
+        [video("a", "a.mp4"), video("b", "b.mkv")],
+        {"a": "proxy-a", "b": "proxy-b"},
+    )
+    processed = install_proxy_batch(monkeypatch, client)
+
+    report = download_proxy.download_proxy("private-share", tmp_path)
+
+    assert [item["status"] for item in report] == ["PASS", "PASS"]
+    assert client.requested == ["a", "b"]
+    assert [item[0] for item in processed] == ["proxy-a", "proxy-b"]
+
+
+def test_folder_ignores_non_video_candidates(monkeypatch, tmp_path):
+    client = FakeShareClient(
+        [
+            video("video", "movie.mp4"),
+            {"file_id": "text", "filename": "notes.txt", "candidate_type": "non_video"},
+        ],
+        {"video": "proxy-video"},
+    )
+    install_proxy_batch(monkeypatch, client)
+
+    report = download_proxy.download_proxy("private-share", tmp_path)
+
+    assert [item["file_id"] for item in report] == ["video"]
+    assert client.requested == ["video"]
+
+
+def test_folder_with_zero_videos_fails_explicitly(monkeypatch):
+    client = FakeShareClient(
+        [{"file_id": "text", "filename": "notes.txt", "candidate_type": "non_video"}],
+        {},
+    )
+    install_proxy_batch(monkeypatch, client)
+
+    with pytest.raises(ValueError, match="zero video candidates"):
+        download_proxy.download_proxy("private-share")
+
+
+def test_missing_480p_fails_only_that_file_explicitly(monkeypatch, tmp_path):
+    client = FakeShareClient(
+        [video("ok", "ok.mp4"), video("missing", "missing.mp4")],
+        {
+            "ok": "proxy-ok",
+            "missing": download_proxy.ProxyVariantNotFound("480P proxy not found"),
+        },
+    )
+    install_proxy_batch(monkeypatch, client)
+
+    report = download_proxy.download_proxy("private-share", tmp_path)
+
+    assert report[0]["status"] == "PASS"
+    assert report[1]["status"] == "FAIL"
+    assert report[1]["file_id"] == "missing"
+    assert report[1]["error_type"] == "ProxyVariantNotFound"

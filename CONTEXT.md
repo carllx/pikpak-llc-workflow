@@ -16,3 +16,5 @@
 * **LLC File**：LosslessCut 输出的 `.llc` 格式项目文件，用于承载被选中的时间片段 (`cutSegments`)。
 * **Origin Segments**：对应 `.llc` 切片范围的原始超清视频的字节块。
 * **Range Fetch**：使用 HTTP `Range` 头只下载文件的局部。
+* **Share Video Candidate**：Share 中可作为 Proxy/Origin 源的视频文件；由稳定 `file_id` 标识，并携带真实 `filename`。Folder Share 默认处理全部候选，非视频文件不参与。
+* **LLC Source Selection**：使用 LLC `mediaFileName` 与候选的唯一 filename/stem 匹配，再以匹配项的 `file_id` 获取 Origin；禁止用 API 数组位置选择源。
