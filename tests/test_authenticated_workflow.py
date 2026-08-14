@@ -133,11 +133,32 @@ def test_missing_or_ambiguous_source_is_explicit_per_llc_failure(monkeypatch, tm
 
     assert report["STATUS"] == "FAIL"
     assert [item["STATUS"] for item in report["LLC_RESULTS"]] == ["FAIL", "FAIL"]
-    assert all(item["ERROR_TYPE"] == "ValueError" for item in report["LLC_RESULTS"])
+    assert all(item["ERROR_TYPE"] == "SourceSelectionError" for item in report["LLC_RESULTS"])
+    assert all(item["ERROR_CODE"] == "SOURCE_MATCH_FAILED" for item in report["LLC_RESULTS"])
     assert [item["SOURCE"] for item in report["LLC_RESULTS"]] == [
         "same_h264.mp4",
         "missing_h264.mp4",
     ]
+
+
+def test_invalid_llc_structure_classifies_as_unclassified_failure(monkeypatch, tmp_path):
+    workspace, job = prepare_job(tmp_path, ["bad.llc"])
+    (job.projects / "bad.llc").write_text("{ not valid json5", encoding="utf-8")
+    monkeypatch.setattr(
+        workflow.ShareMediaClient,
+        "open",
+        lambda share: type("Client", (), {"files": [{"file_id": "1", "filename": "movie.mp4", "candidate_type": "video"}]})(),
+    )
+
+    report = workflow.run_latest_job(FakeTransport(), workspace.root)
+
+    assert report["STATUS"] == "FAIL"
+    result = report["LLC_RESULTS"][0]
+    assert result["STATUS"] == "FAIL"
+    assert result["ERROR_CODE"] != "SOURCE_MATCH_FAILED"
+    assert result["ERROR_CODE"] == "UNCLASSIFIED_FAILURE"
+    assert result["ERROR_TYPE"] == "ValueError"
+    assert result["ROOT_CAUSE"] == "UNVERIFIED"
 
 
 def test_one_llc_failure_does_not_silently_skip_other_projects(monkeypatch, tmp_path):

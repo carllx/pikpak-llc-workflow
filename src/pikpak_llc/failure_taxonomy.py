@@ -3,6 +3,7 @@
 from .authenticated_transport import ProfileProvisioningRequired
 from .operator_preflight import OperatorPreflightError
 from .origin_budget import BudgetConfirmationRequired
+from .pikpak_api import SourceSelectionError
 from .range_guard import RangeGuardError
 from .rclone_adapter import RcloneTargetError
 from .experimental_workflow import WorkflowError
@@ -36,6 +37,8 @@ def classify_error(error):
         if "exceeded limit" in detail or "budget" in detail or "fuse" in detail:
             return ErrorCode.HARD_FUSE_HIT
         return ErrorCode.AUTH_ORIGINAL_RANGE_FAILED
+    if isinstance(error, SourceSelectionError):
+        return ErrorCode.SOURCE_MATCH_FAILED
     if isinstance(error, WorkflowError):
         detail = str(error).casefold()
         if any(marker in detail for marker in ("stream", "probeable", "playable", "inventory")):
@@ -43,6 +46,4 @@ def classify_error(error):
         if "ffmpeg" in detail:
             return ErrorCode.FFMPEG_FAILED
         return ErrorCode.OUTPUT_VALIDATION_FAILED
-    if isinstance(error, (ValueError, KeyError)):
-        return ErrorCode.SOURCE_MATCH_FAILED
     return ErrorCode.UNCLASSIFIED_FAILURE

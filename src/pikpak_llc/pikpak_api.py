@@ -17,6 +17,10 @@ VIDEO_EXTENSIONS = {
 class ProxyVariantNotFound(ValueError):
     pass
 
+
+class SourceSelectionError(ValueError):
+    pass
+
 def get_default_headers(device_id, client_id, client_version, package_name):
     return {
       'x-device-id': device_id,
@@ -315,7 +319,7 @@ def _matching_stem(filename):
 def select_share_video(files, media_filename):
     """Select one video by unique filename or normalized proxy stem."""
     if not media_filename:
-        raise ValueError("LLC mediaFileName is required for source selection")
+        raise SourceSelectionError("LLC mediaFileName is required for source selection")
     videos = [item for item in files if item["candidate_type"] == "video"]
     requested_name = Path(media_filename).name.casefold()
     exact = [item for item in videos if item["filename"].casefold() == requested_name]
@@ -325,9 +329,9 @@ def select_share_video(files, media_filename):
         if _matching_stem(item["filename"]) == _matching_stem(media_filename)
     ]
     if not matches:
-        raise ValueError("LLC mediaFileName does not match a Share video")
+        raise SourceSelectionError("LLC mediaFileName does not match a Share video")
     if len(matches) != 1:
-        raise ValueError("LLC mediaFileName matches multiple Share videos")
+        raise SourceSelectionError("LLC mediaFileName matches multiple Share videos")
     return matches[0]
 
 def download_proxy_video(share_url, output_path):

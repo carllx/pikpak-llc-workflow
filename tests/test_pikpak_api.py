@@ -1,6 +1,7 @@
 import pytest
 from pikpak_llc.pikpak_api import (
     ShareMediaClient,
+    SourceSelectionError,
     download_range,
     get_media_variants,
     select_share_video,
@@ -419,5 +420,5 @@ def test_llc_filename_selects_unique_share_video_by_proxy_stem():
     ],
 )
 def test_llc_filename_ambiguous_or_missing_match_fails(files, message):
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(SourceSelectionError, match=message):
         select_share_video(files, "same_h264.mov")
