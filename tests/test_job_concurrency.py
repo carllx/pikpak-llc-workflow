@@ -231,3 +231,139 @@ def test_prepare_share_proxies_fails_closed_if_output_outside_job_proxies(monkey
 
     assert result["files"][0]["status"] == "FAIL"
     assert result["files"][0]["error_type"] == "WorkspaceJobMismatch"
+
+
+def test_cross_process_cross_stage_identity_with_job_id(monkeypatch, tmp_path):
+    """Test E: Proxy creates Job A, Job B changes LATEST, Origin invoked with explicit JOB_ID for A."""
+    workspace = JobWorkspace(tmp_path / "workspace")
+
+    client_a = FakeShareClient([video("v1", "video_a.mp4")], {"v1": "proxy-url-a"})
+    client_b = FakeShareClient([video("v2", "video_b.mp4")], {"v2": "proxy-url-b"})
+
+    def fake_open(share_url):
+        if "share-a" in str(share_url):
+            return client_a
+        if "share-b" in str(share_url):
+            return client_b
+        raise ValueError(f"Unknown share {share_url}")
+
+    monkeypatch.setattr(download_proxy.ShareMediaClient, "open", fake_open)
+    monkeypatch.setattr(download_proxy.shutil, "which", lambda cmd: cmd)
+    monkeypatch.setattr(download_proxy, "check_hw_encoder", lambda: "libx264")
+
+    def fake_download_and_transcode(url, raw, compatible, encoder):
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        raw.touch()
+        compatible.touch()
+
+    monkeypatch.setattr(
+        download_proxy, "_download_and_transcode", fake_download_and_transcode
+    )
+
+    # 1. Conversation A executes Proxy -> receives JOB_ID A
+    result_a = download_proxy.prepare_share_proxies(
+        "https://mypikpak.com/s/share-a", workspace_root=workspace.root
+    )
+    job_id_a = result_a["JOB_ID"]
+    assert job_id_a is not None
+    job_a = workspace._resolve_job(job_id_a)
+    (job_a.projects / "video_a.llc").write_text("{}", encoding="utf-8")
+
+    # 2. Conversation B subsequently starts Job B -> overwrites LATEST.txt
+    result_b = download_proxy.prepare_share_proxies(
+        "https://mypikpak.com/s/share-b", workspace_root=workspace.root
+    )
+    job_id_b = result_b["JOB_ID"]
+    job_b = workspace._resolve_job(job_id_b)
+    (job_b.projects / "video_b.llc").write_text("{}", encoding="utf-8")
+
+    assert workspace.latest().root == job_b.root
+    assert job_id_a != job_id_b
+
+    # 3. Conversation A wakes up and runs Origin specifically with --job-id <JOB_ID_A>
+    def fake_parse_llc(path):
+        if "video_a" in Path(path).name:
+            return {"mediaFileName": "video_a_h264.mp4", "cutSegments": [{"start": 1.0, "end": 2.0}]}
+        if "video_b" in Path(path).name:
+            return {"mediaFileName": "video_b_h264.mp4", "cutSegments": [{"start": 1.0, "end": 2.0}]}
+        raise ValueError(f"Unknown LLC {path}")
+
+    def fake_probe(url, ledger):
+        ledger.reserve(100)
+        ledger.consume(100)
+        return {
+            "format": {"duration": "100", "format_name": "mov,mp4"},
+            "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
+        }
+
+    def fake_extract(url, segments, output_dir, ledger, segment_results):
+        outputs = []
+        for i, entry in enumerate(segment_results, 1):
+            out_path = Path(output_dir) / f"segment_{i:03d}.mp4"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.touch()
+            entry.update(STATUS="PASS", OUTPUT=str(out_path), ERROR_CODE=None, ERROR_TYPE=None)
+            outputs.append(out_path)
+        return outputs, [], ["video:h264"]
+
+    monkeypatch.setattr(workflow, "parse_llc_project", fake_parse_llc)
+    monkeypatch.setattr(workflow.ShareMediaClient, "open", fake_open)
+    monkeypatch.setattr(workflow, "probe_origin", fake_probe)
+    monkeypatch.setattr(workflow, "extract_progressive_segments", fake_extract)
+
+    transport = FakeTransport()
+    report = workflow.run_job(job_id_a, transport, workspace_root=workspace.root)
+
+    # Assertions for Job A isolation:
+    assert report["STATUS"] == "PASS"
+    assert report["JOB_ID"] == job_id_a
+    assert report["CUT_PROJECTS"] == 1
+    assert report["LLC_RESULTS"][0]["LLC_PROJECT"] == "video_a.llc"
+    assert report["LLC_RESULTS"][0]["SOURCE"] == "video_a.mp4"
+    assert Path(report["PROXY_DIR"]).parent == job_a.root
+    assert Path(report["SEGMENTS_DIR"]).parent == job_a.root
+    assert Path(report["LLC_RESULTS"][0]["OUTPUTS"][0]).parent == job_a.segments / "video_a"
+    assert transport.opened == ["video_a.mp4"]
+    # Job B files were completely untouched
+    assert not any(p.exists() for p in (job_b.segments).glob("*"))
+
+
+def test_invalid_explicit_job_reference_fails_closed(tmp_path):
+    """Test F: Invalid explicit job reference must fail closed."""
+    workspace = JobWorkspace(tmp_path / "workspace")
+    job = workspace.start_share("https://mypikpak.com/s/share")
+
+    # 1. Non-existent Job ID
+    with pytest.raises(WorkspaceError, match="Invalid job reference"):
+        workspace._resolve_job("non-existent-job-id")
+
+    # 2. Path traversal attempts
+    with pytest.raises(WorkspaceError, match="Invalid job reference"):
+        workspace._resolve_job("../outside")
+
+    # 3. Nested path
+    with pytest.raises(WorkspaceError, match="Invalid job reference"):
+        workspace._resolve_job("nested/subjob")
+
+    # 4. Arbitrary types / outside paths
+    with pytest.raises(WorkspaceError, match="Invalid job reference"):
+        workspace._resolve_job(12345)
+
+    with pytest.raises(WorkspaceError, match="Invalid job reference"):
+        workspace._resolve_job(Path("/tmp/outside"))
+
+
+def test_cli_job_id_invocation(monkeypatch, capsys, tmp_path):
+    """Verify CLI --job-id argument passes explicit job to run_default_job."""
+    captured_job = []
+
+    monkeypatch.setattr(workflow, "run_operator_preflight", lambda: {})
+    monkeypatch.setattr(
+        workflow,
+        "run_default_job",
+        lambda job: captured_job.append(job) or {"STATUS": "PASS", "JOB_ID": job},
+    )
+
+    assert workflow.main(argv=["--job-id", "explicit-job-123"]) == 0
+    assert captured_job == ["explicit-job-123"]
+

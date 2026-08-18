@@ -195,7 +195,11 @@ def prepare_share_proxies(share_url, workspace_root="workspace"):
             except ValueError:
                 item["status"] = "FAIL"
                 item["error_type"] = "WorkspaceJobMismatch"
-    return {**workspace.public_output_paths(job=job), "files": files}
+    return {
+        "JOB_ID": job.root.name,
+        **workspace.public_output_paths(job=job),
+        "files": files,
+    }
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv

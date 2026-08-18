@@ -59,16 +59,31 @@ class JobWorkspace:
         return paths
 
     def _resolve_job(self, job=None):
-        if job is not None:
-            if isinstance(job, JobPaths):
-                return job
-            if isinstance(job, (str, Path)):
-                job_path = Path(job)
-                if not job_path.is_absolute() and job_path.parent == Path("."):
-                    job_path = self.root / "jobs" / job_path
-                return self._paths(job_path)
-            raise WorkspaceError("Invalid job reference")
-        return self.latest()
+        if job is None:
+            return self.latest()
+        jobs_root = (self.root / "jobs").resolve()
+        if isinstance(job, JobPaths):
+            job_root = job.root.resolve()
+            if (
+                job_root.parent != jobs_root
+                or not job_root.is_dir()
+                or not (job_root / "job.json").is_file()
+            ):
+                raise WorkspaceError("Invalid job reference")
+            return job
+        if isinstance(job, str):
+            job_str = job.strip()
+            if not job_str or Path(job_str).name != job_str:
+                raise WorkspaceError("Invalid job reference")
+            job_root = (jobs_root / job_str).resolve()
+            if (
+                job_root.parent != jobs_root
+                or not job_root.is_dir()
+                or not (job_root / "job.json").is_file()
+            ):
+                raise WorkspaceError("Invalid job reference")
+            return self._paths(job_root)
+        raise WorkspaceError("Invalid job reference")
 
     def latest(self):
         pointer = self.root / "LATEST.txt"

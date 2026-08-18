@@ -17,16 +17,16 @@ description: 处理本仓库的 PikPak Share、proxy preparation、LosslessCut .
 
 ## Proxy：用户提供 Share
 
-1. 运行 `python download_proxy.py <share>`，创建 Job 并处理 Share 内全部 video candidates。
+1. 运行 `python download_proxy.py <share>`，创建 Job 并处理 Share 内全部 video candidates；从程序结果获取本次 `JOB_ID` 并作为本会话后续流程的 Job 上下文。
 2. 确认每个候选都有显式 PASS/FAIL；PASS 输出为 LosslessCut-compatible P480/H.264 且 `ffprobe` 成功。
-3. 返回 `PROXY_DIR`，请用户在 LosslessCut 中为所需视频保存 `.llc` 到当前 Job 的 `projects/`。
+3. 向用户返回 `PROXY_DIR`，请用户在 LosslessCut 中为所需视频保存 `.llc` 到当前 Job 的 `projects/`（用户无需手工记忆或输入 `JOB_ID`）。
 
 完成标准：全部候选都有结果；成功 proxy 保留原 proxy 与 H.264 输出；不存在静默跳过。
 
 ## Origin：用户说 LLC 已完成
 
-1. 从 `workspace/LATEST.txt` 定位当前 Job；自动发现 `projects/` 中全部 `.llc`。
-2. secure profile 有效时直接运行 `python -m pikpak_llc.authenticated_workflow`。
+1. 若当前会话持有 Proxy 阶段记录的 `JOB_ID`，必须显式以 `--job-id <JOB_ID>` 执行 Origin；仅在没有显式 Job 上下文时允许从 `workspace/LATEST.txt` 恢复最近 Job；自动发现 `projects/` 中全部 `.llc`。
+2. secure profile 有效时运行 `python -m pikpak_llc.authenticated_workflow --job-id <JOB_ID>`（无显式 ID 时回退为无参 `python -m pikpak_llc.authenticated_workflow`）。
 3. profile 缺失或明确失效时，运行一次 `python -m pikpak_llc.profile_setup`，完成后自动重试 authenticated workflow。
 4. 检查 batch report：每个 LLC 都有 PASS/FAIL、唯一 source、outputs、budget 与实际 Range bytes；输出位于 `segments/<source-stem>/`。
 5. 返回 `SEGMENTS_DIR`。单项 FAIL 时只调查该项，不重跑已 PASS 的片段。
@@ -37,8 +37,8 @@ description: 处理本仓库的 PikPak Share、proxy preparation、LosslessCut .
 
 ## Daily guardrails
 
-- 正常 Origin 入口固定为 `python -m pikpak_llc.authenticated_workflow`；`experimental_workflow.py segments` 仅保留 evidence/compatibility 用途，`origin_segment_extractor.py` 禁止用于 daily workflow。
-- 日常 Origin 从 LATEST Job 恢复 Share、LLC 和输出目录，并自动计算预算；不向用户索取 Share URL、LLC path、output path、`--max-origin-bytes`、rclone config、config password、file ID、file index 或 Range。
+- 正常 Origin 入口固定为 `python -m pikpak_llc.authenticated_workflow`（持有 Job 上下文时带 `--job-id <JOB_ID>`）；`experimental_workflow.py segments` 仅保留 evidence/compatibility 用途，`origin_segment_extractor.py` 禁止用于 daily workflow。
+- 日常 Origin 优先从当前会话持有 Job 或 LATEST Job 恢复 Share、LLC 和输出目录，并自动计算预算；不向用户索取 Share URL、LLC path、output path、`--max-origin-bytes`、rclone config、config password、file ID、file index 或 Range。
 - authenticated transport 使用 CurrentUser DPAPI、`%LOCALAPPDATA%\PikPakLLC`、loopback-only rclone 与 `--pikpak-no-media-link`；runtime 明文配置必须在 `finally` 清理。
 - report 只传递安全 telemetry；不转述 signed Origin URL、token、credential 或 private Share URL。
 - 遇到任何 production FAIL 时，在进行任何诊断推断或代码变更前，必须完整读取并遵循 `docs/operations/origin-troubleshooting.md` 中的排障决策树；禁止直接在 canonical master 修改源码。

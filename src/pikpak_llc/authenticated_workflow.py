@@ -1,7 +1,7 @@
-"""Daily authenticated Origin workflow for the current workspace Job."""
-
+import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
 
 from .experimental_workflow import (
@@ -21,7 +21,7 @@ from .origin_budget import estimate_origin_budget
 from .operator_preflight import OperatorPreflightError, run_operator_preflight
 from .pikpak_api import ShareMediaClient, select_share_video
 from .range_guard import RangeGuard, TransferLedger
-from .workspace import JobWorkspace
+from .workspace import JobWorkspace, WorkspaceError
 from .authenticated_transport import build_default_authenticated_transport
 
 
@@ -223,6 +223,7 @@ def run_job(job, transport, workspace_root="workspace"):
     return {
         "STATUS": "PASS" if all(item["STATUS"] == "PASS" for item in results) else "FAIL",
         "ROOT_CAUSE": "UNVERIFIED",
+        "JOB_ID": resolved_job.root.name,
         "CUT_PROJECTS": len(results),
         "SEGMENTS_TOTAL": total_segments,
         "SEGMENTS_PASS": pass_segments,
@@ -240,16 +241,34 @@ def run_latest_job(transport, workspace_root="workspace"):
     return run_job(latest_job, transport, workspace_root)
 
 
+def run_default_job(job=None, workspace_root="workspace"):
+    """Daily entrypoint: use the saved local profile and explicit or latest Job."""
+    return run_job(job, build_default_authenticated_transport(), workspace_root)
+
+
 def run_default_latest_job(workspace_root="workspace"):
     """Daily entrypoint: use the saved local profile and current Job."""
     return run_latest_job(build_default_authenticated_transport(), workspace_root)
 
 
-def main():
-    """Execute the current Job without asking for transport implementation details."""
+def main(argv=None):
+    """Execute the current or specified Job without asking for transport implementation details."""
+    parser = argparse.ArgumentParser(
+        description="Daily authenticated Origin workflow for one Job."
+    )
+    parser.add_argument(
+        "--job-id",
+        dest="job_id",
+        default=None,
+        help="Execute an explicit Job ID instead of resolving LATEST.",
+    )
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
         run_operator_preflight()
-        report = run_default_latest_job()
+        if args.job_id:
+            report = run_default_job(job=args.job_id)
+        else:
+            report = run_default_latest_job()
     except OperatorPreflightError as error:
         report = {
             "STATUS": "FAIL",
@@ -257,8 +276,15 @@ def main():
             "ERROR": error.code,
             "ROOT_CAUSE": "UNVERIFIED",
         }
+    except WorkspaceError as error:
+        report = {
+            "STATUS": "FAIL",
+            "ERROR_CODE": ErrorCode.UNCLASSIFIED_FAILURE,
+            "ERROR": str(error),
+            "ROOT_CAUSE": "UNVERIFIED",
+        }
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report["STATUS"] == "PASS" else 1
+    return 0 if report.get("STATUS") == "PASS" else 1
 
 
 if __name__ == "__main__":
