@@ -184,7 +184,22 @@ def prepare_share_proxies(share_url, workspace_root="workspace"):
     workspace = JobWorkspace(workspace_root)
     job = workspace.start_share(share_url)
     files = download_proxy(share_url, job.proxies)
-    return {**workspace.public_output_paths(), "files": files}
+    job_proxies_dir = job.proxies.resolve()
+    for item in files:
+        if item.get("status") == "PASS":
+            raw_path = Path(item.get("raw_proxy", "")).resolve()
+            comp_path = Path(item.get("compatible_proxy", "")).resolve()
+            try:
+                raw_path.relative_to(job_proxies_dir)
+                comp_path.relative_to(job_proxies_dir)
+            except ValueError:
+                item["status"] = "FAIL"
+                item["error_type"] = "WorkspaceJobMismatch"
+    return {
+        "JOB_ID": job.root.name,
+        **workspace.public_output_paths(job=job),
+        "files": files,
+    }
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
