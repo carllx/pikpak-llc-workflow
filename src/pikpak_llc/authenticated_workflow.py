@@ -101,7 +101,7 @@ def _result_base(llc_path):
     }
 
 
-def _run_project(transport, workspace, llc_path, share_files):
+def _run_project(transport, workspace, llc_path, share_files, job=None):
     result = _result_base(llc_path)
     ledger = None
     segments = []
@@ -113,7 +113,7 @@ def _run_project(transport, workspace, llc_path, share_files):
         result["SOURCE"] = project["mediaFileName"]
         source = select_share_video(share_files, project["mediaFileName"])
         result["SOURCE"] = source["filename"]
-        output_dir = workspace.source_segments(source["filename"])
+        output_dir = workspace.source_segments(source["filename"], job=job)
 
         segment_results = [
             {
@@ -188,12 +188,15 @@ def _run_project(transport, workspace, llc_path, share_files):
     return result
 
 
-def run_latest_job(transport, workspace_root="workspace"):
-    """Process every LLC in LATEST without user-facing transport details."""
+def run_job(job, transport, workspace_root="workspace"):
+    """Process every LLC in explicit job without re-reading LATEST."""
     workspace = JobWorkspace(workspace_root)
-    llc_paths = workspace.find_llcs()
+    resolved_job = workspace._resolve_job(job)
+    llc_paths = workspace.find_llcs(job=resolved_job)
     try:
-        share_files = ShareMediaClient.open(workspace.latest_share()).files
+        share_files = ShareMediaClient.open(
+            workspace.latest_share(job=resolved_job)
+        ).files
     except Exception as error:
         code = classify_error(error)
         results = []
@@ -208,7 +211,8 @@ def run_latest_job(transport, workspace_root="workspace"):
             results.append(result)
     else:
         results = [
-            _run_project(transport, workspace, path, share_files) for path in llc_paths
+            _run_project(transport, workspace, path, share_files, job=resolved_job)
+            for path in llc_paths
         ]
 
     total_segments = sum(item.get("SEGMENTS_TOTAL", 0) for item in results)
@@ -225,8 +229,15 @@ def run_latest_job(transport, workspace_root="workspace"):
         "SEGMENTS_FAIL": fail_segments,
         "SEGMENTS_NOT_RUN": not_run_segments,
         "LLC_RESULTS": results,
-        **workspace.public_output_paths(),
+        **workspace.public_output_paths(job=resolved_job),
     }
+
+
+def run_latest_job(transport, workspace_root="workspace"):
+    """Process every LLC in LATEST without user-facing transport details."""
+    workspace = JobWorkspace(workspace_root)
+    latest_job = workspace.latest()
+    return run_job(latest_job, transport, workspace_root)
 
 
 def run_default_latest_job(workspace_root="workspace"):
