@@ -27,13 +27,19 @@ description: 处理本仓库的 PikPak Share、proxy preparation、LosslessCut .
 
 1. 若当前会话持有 Proxy 阶段记录的 `JOB_ID`，必须显式以 `--job-id <JOB_ID>` 执行 Origin；仅在没有显式 Job 上下文时允许从 `workspace/LATEST.txt` 恢复最近 Job；自动发现 `projects/` 中全部 `.llc`。
 2. secure profile 有效时运行 `python -m pikpak_llc.authenticated_workflow --job-id <JOB_ID>`（无显式 ID 时回退为无参 `python -m pikpak_llc.authenticated_workflow`）。
-3. profile 缺失或明确失效时，运行一次 `python -m pikpak_llc.profile_setup`，完成后自动重试 authenticated workflow。
+3. profile 缺失或明确失效时，运行一次 `python -m pikpak_llc.profile_setup`（若用户已提供账号密码，直接运行 `python -m pikpak_llc.profile_setup --user <email> --pass <password>` 快捷完成），完成后自动重试 authenticated workflow。
 4. 检查 batch report：每个 LLC 都有 PASS/FAIL、唯一 source、outputs、budget 与实际 Range bytes；输出位于 `segments/<source-stem>/`。
 5. 返回 `SEGMENTS_DIR`。单项 FAIL 时只调查该项，不重跑已 PASS 的片段。
 
 完成标准：全部 LLC 被处理且无静默跳过；每个 PASS 项满足非空可播放输出、stream inventory preserved、`-map 0 -c copy`、RangeGuard PASS、仅 upstream 206、无 HTTP 200 body、累计 bytes 不超过自动 hard fuse。
 
 只有 batch `STATUS=PASS` 且每个 segment 均通过上述 completion gate，才向用户报告 Origin 下载成功。文件存在或进程 exit code 0 不构成成功。
+
+## Profile & Credential Setup：用户配置或更新账号
+
+当用户主动提供 PikPak 账号与密码（如“邮箱 xxx 密码 yyy 更新账号”）或需要重设凭据时：
+- 若用户提供了邮箱与密码：运行 `python -m pikpak_llc.profile_setup --user <email> --pass <password>`，脚本将自动配置、验证并由 DPAPI 加密保存，随后清理临时明文。
+- 若未提供参数：运行交互式 `python -m pikpak_llc.profile_setup`。
 
 ## Daily guardrails
 

@@ -1,5 +1,6 @@
-"""One-time visible setup for the DPAPI-bound authenticated profile."""
+"""Setup for the DPAPI-bound authenticated profile."""
 
+import argparse
 import configparser
 import subprocess
 
@@ -40,10 +41,64 @@ def provision_interactively(layout=None, store=None, runner=subprocess.run):
         store.cleanup(temporary)
 
 
-def main():
+def provision_credentials(user, password, layout=None, store=None, runner=subprocess.run):
+    """Non-interactively configure rclone credentials, validate, protect with DPAPI and cleanup."""
+    if not user or not password:
+        raise ValueError("Both user and password are required for direct credential provisioning")
+    layout = layout or PikPakLocalLayout()
+    store = store or DPAPIProfileStore(layout)
+    executable = layout.bin / "rclone.exe"
+    if not executable.is_file():
+        raise FileNotFoundError("Portable rclone is missing from PikPakLLC/bin")
+    temporary = layout.runtime / "provisioning.conf"
+    layout.runtime.mkdir(parents=True, exist_ok=True)
+    store.cleanup(temporary)
+    try:
+        runner(
+            [
+                str(executable),
+                "config",
+                "create",
+                "pikpak_gate",
+                "pikpak",
+                "user",
+                str(user),
+                "pass",
+                str(password),
+                "--config",
+                str(temporary),
+            ],
+            check=True,
+        )
+        if not temporary.is_file():
+            raise RuntimeError("rclone setup did not create a configuration")
+        adapter = RcloneAdapter(executable, layout=layout, runner=runner)
+        adapter.validate_profile(temporary)
+        store.provision(temporary)
+        print("安全 profile 已保存；临时明文配置已清理。")
+    finally:
+        store.cleanup(temporary)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="PikPak LLC authenticated profile setup")
+    parser.add_argument("-u", "--user", help="PikPak account username/email")
+    parser.add_argument(
+        "-p", "--pass", "--password", dest="password", help="PikPak account password"
+    )
+    args = parser.parse_args(argv)
+
     run_operator_preflight()
-    provision_interactively()
+    if args.user and args.password:
+        provision_credentials(args.user, args.password)
+    elif args.user or args.password:
+        parser.error(
+            "Both --user and --pass/--password are required when passing credentials via CLI"
+        )
+    else:
+        provision_interactively()
 
 
 if __name__ == "__main__":
     main()
+
